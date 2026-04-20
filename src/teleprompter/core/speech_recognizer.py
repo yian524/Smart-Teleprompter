@@ -326,6 +326,7 @@ class SpeechRecognizerWorker(QObject):
     _PUNCT_TO_STRIP = "。，！？!?；;,：:、…．·"
 
     def _transcribe(self, samples) -> str:
+        """Whisper 推論 + 後處理（語言強制、標點剝除）。"""
         segments_iter, info = self._model.transcribe(
             samples,
             language=self.language,
@@ -334,16 +335,40 @@ class SpeechRecognizerWorker(QObject):
             best_of=1,
             temperature=0.0,
             vad_filter=True,
+            vad_parameters={"min_silence_duration_ms": 500},
             condition_on_previous_text=False,
-            no_speech_threshold=0.7,
-            log_prob_threshold=-1.0,
-            compression_ratio_threshold=2.4,
+            no_speech_threshold=0.8,             # 進一步提高（原 0.7）
+            log_prob_threshold=-0.8,             # 進一步提高（原 -1.0）
+            compression_ratio_threshold=2.2,     # 略嚴的過度重複檢測
         )
         pieces: list[str] = []
         for s in segments_iter:
             pieces.append(s.text)
         text = "".join(pieces).strip()
-        return self._strip_punctuation(text)
+        text = self._strip_punctuation(text)
+        # 語言強制：language=en 時，若輸出含 CJK 超過 20% → 濾掉（Whisper 誤辨）
+        if text and self.language == "en" and self._looks_non_english(text):
+            logger.info("rejected CJK under language=en: %r", text[:50])
+            return ""
+        # 反向：language=zh 時輸出純英文 → 濾掉
+        if text and self.language == "zh" and self._is_nearly_pure_english(text):
+            logger.info("rejected pure-English under language=zh: %r", text[:50])
+            return ""
+        return text
+
+    @staticmethod
+    def _looks_non_english(text: str) -> bool:
+        if not text:
+            return False
+        cjk = sum(1 for c in text if 0x4E00 <= ord(c) <= 0x9FFF)
+        return cjk / len(text) > 0.2
+
+    @staticmethod
+    def _is_nearly_pure_english(text: str) -> bool:
+        if not text or len(text) < 8:
+            return False
+        cjk = sum(1 for c in text if 0x4E00 <= ord(c) <= 0x9FFF)
+        return cjk == 0
 
     @classmethod
     def _strip_punctuation(cls, text: str) -> str:

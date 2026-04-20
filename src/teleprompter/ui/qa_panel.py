@@ -183,11 +183,14 @@ class QAPanel(QWidget):
         濾掉：
         - 太短（< 3 字）
         - 明顯重複 N-gram（Whisper hallucination）
+        - 與選擇語言不符（例：選了 en 卻吐中文，或選了 zh 卻吐純英文）
         """
         text = text.strip()
         if len(text) < 3:
             return
         if self._looks_like_hallucination(text):
+            return
+        if self._mismatches_selected_language(text):
             return
         self._recognized_accum = (self._recognized_accum + " " + text).strip()
         if len(self._recognized_accum) > 300:
@@ -197,6 +200,19 @@ class QAPanel(QWidget):
         # 若啟用翻譯 → 送去翻譯（含英文才翻）
         if self.translate_check.isChecked() and self.translator.is_running():
             self.translator.translate(self._recognized_accum)
+
+    def _mismatches_selected_language(self, text: str) -> bool:
+        """輸出文字與使用者選的辨識語言不符 → 擋掉（多一層保護）。"""
+        lang = self.get_language()
+        if lang == "auto":
+            return False  # auto 模式不檢查
+        cjk = sum(1 for c in text if 0x4E00 <= ord(c) <= 0x9FFF)
+        ratio_cjk = cjk / max(1, len(text))
+        if lang == "en" and ratio_cjk > 0.2:
+            return True  # 選英文卻出中文
+        if lang == "zh" and len(text) >= 8 and cjk == 0:
+            return True  # 選中文卻全英文
+        return False
 
     @staticmethod
     def _looks_like_hallucination(text: str) -> bool:

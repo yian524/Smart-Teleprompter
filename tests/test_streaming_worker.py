@@ -114,6 +114,25 @@ def test_worker_update_prompt_with_empty_clears_it(qapp):
     assert worker.initial_prompt == ""
 
 
+def test_looks_non_english_detects_cjk():
+    from teleprompter.core.speech_recognizer import SpeechRecognizerWorker
+    # 全 CJK → 非英文
+    assert SpeechRecognizerWorker._looks_non_english("你好世界")
+    # 大量中文混少量英文 → 非英文
+    assert SpeechRecognizerWorker._looks_non_english("hi 你好我是今天的報告人")
+    # 純英文 → 是英文
+    assert not SpeechRecognizerWorker._looks_non_english("hello world this is english")
+    # 含極少量 CJK 符號（< 20%）→ 可接受
+    assert not SpeechRecognizerWorker._looks_non_english("The word is 家 in Chinese.")
+
+
+def test_is_nearly_pure_english_detects():
+    from teleprompter.core.speech_recognizer import SpeechRecognizerWorker
+    assert SpeechRecognizerWorker._is_nearly_pure_english("hello world")
+    assert not SpeechRecognizerWorker._is_nearly_pure_english("大家好")
+    assert not SpeechRecognizerWorker._is_nearly_pure_english("hi")  # 太短
+
+
 def test_strip_punctuation_removes_chinese_and_english_punct():
     from teleprompter.core.speech_recognizer import SpeechRecognizerWorker
     s = "大家好，我是今天的報告人。今天介紹 transformer！"

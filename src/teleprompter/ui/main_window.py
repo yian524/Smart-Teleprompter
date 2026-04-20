@@ -816,15 +816,27 @@ class MainWindow(QMainWindow):
         self.status_recognized.setText("已回到提詞模式")
 
     def _switch_recognizer_language(self, language: str) -> None:
-        """重啟 recognizer 以套用新語言（language 只能在建構時設）。"""
-        if self.recognizer.is_running():
-            self.recognizer.stop()
-            self.recognizer.start(
-                model_size=self.cfg.model_size,
-                language=language,
-                compute_type=self.cfg.compute_type,
-                initial_prompt=(self.transcript.full_text[:200] if self.transcript else ""),
-            )
+        """重啟 recognizer 以套用新語言（language 只能在建構時設）。
+
+        Q&A 模式（qa panel visible）時：
+        - 不傳中文講稿當 prompt（避免 Whisper 被中文語料誘導輸出中文）
+        - 用中性 prompt 或空字串
+        """
+        if not self.recognizer.is_running():
+            return
+        self.recognizer.stop()
+        # 決定 initial_prompt：提詞模式用講稿；Q&A 模式不帶任何偏向
+        if self.qa_panel.isVisible():
+            # Q&A 模式：用空 prompt，讓 Whisper 純粹依音訊辨識
+            prompt = ""
+        else:
+            prompt = self.transcript.full_text[:200] if self.transcript else ""
+        self.recognizer.start(
+            model_size=self.cfg.model_size,
+            language=language,
+            compute_type=self.cfg.compute_type,
+            initial_prompt=prompt,
+        )
 
     def _ask_target_duration(self) -> None:
         seconds, ok = QInputDialog.getInt(
