@@ -8,8 +8,15 @@ from pathlib import Path
 
 from PySide6.QtWidgets import QApplication
 
-from .config import load_config
-from .ui.main_window import MainWindow
+# 相容兩種呼叫方式：
+# - `python -m teleprompter.main` → relative import
+# - 直接執行 main.py / PyInstaller → absolute import fallback
+try:
+    from .config import load_config
+    from .ui.main_window import MainWindow
+except ImportError:
+    from teleprompter.config import load_config
+    from teleprompter.ui.main_window import MainWindow
 
 
 def _load_stylesheet() -> str:

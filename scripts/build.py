@@ -40,10 +40,13 @@ def _find_nvidia_dll_dirs() -> list[Path]:
 
 def main() -> int:
     root = Path(__file__).resolve().parent.parent
-    entry = root / "src" / "teleprompter" / "main.py"
+    # 用頂層 entry script（絕對 import，避免 PyInstaller 不認 relative import）
+    entry = root / "scripts" / "run_teleprompter.py"
     resource_dir = root / "src" / "teleprompter" / "resources"
 
     sep = ";" if sys.platform == "win32" else ":"
+
+    hooks_dir = root / "scripts" / "hooks"
 
     cmd = [
         sys.executable,
@@ -57,6 +60,8 @@ def main() -> int:
         "Teleprompter",
         "--paths",
         str(root / "src"),
+        "--additional-hooks-dir",
+        str(hooks_dir),                      # 覆寫 buggy 的 webrtcvad hook
         "--add-data",
         f"{resource_dir}{sep}teleprompter/resources",
         # faster-whisper / ctranslate2 有隱式模組
@@ -65,6 +70,8 @@ def main() -> int:
         "--collect-data", "faster_whisper",
         # PySide6 Qt plugins
         "--collect-data", "PySide6",
+        # webrtcvad：避開 pyinstaller_hooks_contrib 的 hook bug
+        "--collect-all", "webrtcvad",
         # NVIDIA 運行時 library
         "--hidden-import", "nvidia.cublas",
         "--hidden-import", "nvidia.cudnn",
