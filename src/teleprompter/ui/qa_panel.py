@@ -70,11 +70,12 @@ class QAPanel(QWidget):
         toolbar.addWidget(self.clear_btn)
 
         # 辨識語言下拉（Q&A 時觀眾可能講英文或中文）
+        # 建議手動選擇，auto 模式對短片段辨識不穩容易出亂碼
         self.lang_combo = QComboBox()
+        self.lang_combo.addItem("🇺🇸 英文（國際會議推薦）", "en")
         self.lang_combo.addItem("🇹🇼 中文", "zh")
-        self.lang_combo.addItem("🇺🇸 英文", "en")
-        self.lang_combo.addItem("🌍 自動偵測", "auto")
-        self.lang_combo.setCurrentIndex(2)  # 預設 auto（適合國際會議）
+        self.lang_combo.addItem("🌍 自動偵測（不穩定）", "auto")
+        self.lang_combo.setCurrentIndex(0)  # 預設英文（國際場合）
         self.lang_combo.currentIndexChanged.connect(self._on_lang_changed)
         toolbar.addWidget(QLabel("辨識語言"))
         toolbar.addWidget(self.lang_combo)
@@ -91,7 +92,18 @@ class QAPanel(QWidget):
 
         layout.addLayout(toolbar)
 
-        # 翻譯結果顯示區（預設隱藏）
+        # 1) 觀眾提問（原始辨識）— 放在最上面
+        q_label = QLabel("🎤 觀眾提問（即時辨識，原文）")
+        q_label.setStyleSheet("color: #FFD54A; font-size: 14px; font-weight: 600;")
+        layout.addWidget(q_label)
+
+        self.question_text = QTextEdit()
+        self.question_text.setReadOnly(True)
+        self.question_text.setFixedHeight(110)
+        self.question_text.setPlaceholderText("等待提問中…")
+        layout.addWidget(self.question_text)
+
+        # 2) 中文翻譯（下方，只在翻譯開關啟用時顯示）
         self.translation_label = QLabel("🌐 中文翻譯")
         self.translation_label.setStyleSheet("color: #80D8FF; font-size: 13px;")
         self.translation_label.hide()
@@ -112,17 +124,7 @@ class QAPanel(QWidget):
         self.translator = TranslatorController(self)
         self.translator.translated.connect(self._on_translation_ready)
         self.translator.error.connect(self._on_translate_error)
-
-        # 提問顯示區
-        q_label = QLabel("🎤 觀眾提問（即時辨識）")
-        q_label.setStyleSheet("color: #FFD54A; font-size: 14px; font-weight: 600;")
-        layout.addWidget(q_label)
-
-        self.question_text = QTextEdit()
-        self.question_text.setReadOnly(True)
-        self.question_text.setFixedHeight(120)
-        self.question_text.setPlaceholderText("等待提問中…")
-        layout.addWidget(self.question_text)
+        self.translator.engine_ready.connect(self._on_translator_ready)
 
         # 匹配信心顯示
         self.match_info = QLabel("")
@@ -173,24 +175,56 @@ class QAPanel(QWidget):
         self.qa_loaded.emit(count)
 
     def _on_clear_clicked(self) -> None:
+        self.clear_question()
+
+    def append_recognized(self, text: str) -> None:
+        """Speech recognizer 呼叫此函數餵入新辨識的文字。
+
+        濾掉：
+        - 太短（< 3 字）
+        - 明顯重複 N-gram（Whisper hallucination）
+        """
+        text = text.strip()
+        if len(text) < 3:
+            return
+        if self._looks_like_hallucination(text):
+            return
+        self._recognized_accum = (self._recognized_accum + " " + text).strip()
+        if len(self._recognized_accum) > 300:
+            self._recognized_accum = self._recognized_accum[-300:]
+        self.question_text.setPlainText(self._recognized_accum)
+        self._refresh_match()
+        # 若啟用翻譯 → 送去翻譯（含英文才翻）
+        if self.translate_check.isChecked() and self.translator.is_running():
+            self.translator.translate(self._recognized_accum)
+
+    @staticmethod
+    def _looks_like_hallucination(text: str) -> bool:
+        """偵測重複 N-gram 的 hallucination。"""
+        if len(text) < 10:
+            return False
+        # 任意 3-5 gram 在文字中出現 ≥ 3 次 → hallucination
+        for n in (3, 4, 5):
+            if len(text) < n * 3:
+                continue
+            counts: dict[str, int] = {}
+            for i in range(len(text) - n + 1):
+                ng = text[i:i + n]
+                if not ng.strip():
+                    continue
+                counts[ng] = counts.get(ng, 0) + 1
+                if counts[ng] >= 3:
+                    return True
+        return False
+
+    def clear_question(self) -> None:
+        """清空累積的提問（新一輪 Q&A 時用）。"""
         self._recognized_accum = ""
         self.question_text.clear()
         self.answer_text.clear()
+        self.translation_text.clear()
         self.match_info.setText("")
         self.candidates_label.setText("")
-
-    def append_recognized(self, text: str) -> None:
-        """Speech recognizer 呼叫此函數餵入新辨識的文字。"""
-        if not text.strip():
-            return
-        self._recognized_accum = (self._recognized_accum + text).strip()
-        if len(self._recognized_accum) > 200:
-            self._recognized_accum = self._recognized_accum[-200:]
-        self.question_text.setPlainText(self._recognized_accum)
-        self._refresh_match()
-        # 若啟用翻譯 → 送去翻譯
-        if self.translate_check.isChecked() and self.translator.is_running():
-            self.translator.translate(self._recognized_accum)
 
     def get_language(self) -> str:
         return self.lang_combo.currentData() or "auto"
@@ -215,6 +249,9 @@ class QAPanel(QWidget):
 
     def _on_translate_error(self, msg: str) -> None:
         self.translation_text.setPlainText(f"(翻譯失敗：{msg})")
+
+    def _on_translator_ready(self, engine_name: str) -> None:
+        self.translation_label.setText(f"🌐 中文翻譯（引擎：{engine_name}）")
 
     def _refresh_match(self) -> None:
         if not self.library.items or not self._recognized_accum:
