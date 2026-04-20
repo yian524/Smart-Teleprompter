@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace as dataclass_replace
 
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -28,20 +29,49 @@ from ..core.audio_capture import list_input_devices
 
 
 def _make_color_button(initial: str) -> tuple[QPushButton, list[str]]:
-    """回傳一個按鈕與一個 [color] 容器，供 caller 取最新值。"""
+    """回傳一個按鈕與一個 [color] 容器，供 caller 取最新值。
+
+    按鈕底色即選中的顏色；文字顏色依底色明暗自動切換以保持可讀性。
+    加明確 border，避免在深色主題下色塊邊界看不出來。
+    """
     state = [initial]
     btn = QPushButton(initial)
-    btn.setStyleSheet(f"background-color: {initial};")
+    btn.setMinimumWidth(120)
+    btn.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def _apply_style(color_hex: str) -> None:
+        fg = _contrasting_text_color(color_hex)
+        btn.setStyleSheet(
+            f"QPushButton {{ background-color: {color_hex}; color: {fg};"
+            f" border: 1px solid #5A5A5A; border-radius: 4px;"
+            f" padding: 6px 14px; font-weight: 600; }}"
+            f"QPushButton:hover {{ border-color: #4CAF50; }}"
+        )
+
+    _apply_style(initial)
 
     def pick():
         col = QColorDialog.getColor(QColor(state[0]))
         if col.isValid():
             state[0] = col.name()
             btn.setText(state[0])
-            btn.setStyleSheet(f"background-color: {state[0]};")
+            _apply_style(state[0])
 
     btn.clicked.connect(pick)
     return btn, state
+
+
+def _contrasting_text_color(hex_color: str) -> str:
+    """根據底色亮度回傳黑或白以保持可讀性。"""
+    try:
+        c = QColor(hex_color)
+        if not c.isValid():
+            return "#FFFFFF"
+        # 亮度計算（YIQ）
+        y = (c.red() * 299 + c.green() * 587 + c.blue() * 114) / 1000
+        return "#000000" if y > 160 else "#FFFFFF"
+    except Exception:
+        return "#FFFFFF"
 
 
 class SettingsDialog(QDialog):
