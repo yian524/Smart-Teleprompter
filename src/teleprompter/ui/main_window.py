@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from PySide6.QtCore import QPropertyAnimation, QEasingCurve
 
 from ..config import AppConfig, load_config, save_config
 from ..core.alignment_engine import AlignmentEngine
@@ -54,6 +55,92 @@ PACE_TO_COLOR = {
     PaceLight.YELLOW: "#FFC107",
     PaceLight.GRAY: "#9E9E9E",
 }
+
+
+class LoadingOverlay(QFrame):
+    """半透明載入遮罩：模型載入期間顯示，完成後淡出。
+
+    顯示：圖示 + 主要訊息 + 次要進度文字。
+    覆蓋整個父視窗，使用者看得見但無法操作（防止計時誤啟動）。
+    """
+
+    def __init__(self, parent: QWidget) -> None:
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet(
+            "LoadingOverlay { background-color: rgba(0, 0, 0, 180); }"
+            " QLabel { color: white; }"
+        )
+        # 點擊不穿透（吃掉底層操作）
+        self.setAttribute(Qt.WidgetAttribute.WA_NoMousePropagation, True)
+
+        layout = QVBoxLayout(self)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.setSpacing(16)
+
+        self.icon_label = QLabel("⏳")
+        self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.icon_label.setStyleSheet("font-size: 64px;")
+        layout.addWidget(self.icon_label)
+
+        self.main_label = QLabel("正在準備模型…")
+        self.main_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.main_label.setStyleSheet("font-size: 22px; font-weight: 600;")
+        layout.addWidget(self.main_label)
+
+        self.detail_label = QLabel("")
+        self.detail_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.detail_label.setStyleSheet("font-size: 14px; color: #CCCCCC;")
+        self.detail_label.setWordWrap(True)
+        layout.addWidget(self.detail_label)
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 0)  # indeterminate spinner
+        self.progress_bar.setFixedWidth(280)
+        self.progress_bar.setTextVisible(False)
+        self.progress_bar.setStyleSheet(
+            "QProgressBar { background: #333; border-radius: 4px; height: 6px; }"
+            " QProgressBar::chunk { background: #4CAF50; border-radius: 4px; }"
+        )
+        pb_wrap = QHBoxLayout()
+        pb_wrap.addStretch(1)
+        pb_wrap.addWidget(self.progress_bar)
+        pb_wrap.addStretch(1)
+        layout.addLayout(pb_wrap)
+
+        self.hide()
+        self._fade_anim: QPropertyAnimation | None = None
+
+    def set_status(self, main: str, detail: str = "") -> None:
+        self.main_label.setText(main)
+        self.detail_label.setText(detail)
+
+    def set_ready(self, detail: str = "") -> None:
+        self.icon_label.setText("✅")
+        self.main_label.setText("模型就緒")
+        self.detail_label.setText(detail)
+        self.progress_bar.setRange(0, 1)
+        self.progress_bar.setValue(1)
+
+    def show_over(self, parent_widget: QWidget) -> None:
+        self.resize(parent_widget.size())
+        self.move(0, 0)
+        self.raise_()
+        self.show()
+
+    def fade_out_and_hide(self, duration_ms: int = 600) -> None:
+        """淡出動畫後隱藏。"""
+        self._fade_anim = QPropertyAnimation(self, b"windowOpacity")
+        self._fade_anim.setDuration(duration_ms)
+        self._fade_anim.setStartValue(1.0)
+        self._fade_anim.setEndValue(0.0)
+        self._fade_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._fade_anim.finished.connect(self._on_fade_done)
+        self._fade_anim.start()
+
+    def _on_fade_done(self) -> None:
+        self.hide()
+        self.setWindowOpacity(1.0)
 
 
 class TimePanel(QFrame):
@@ -166,6 +253,12 @@ class MainWindow(QMainWindow):
         self.time_panel.adjustSize()
         self._reposition_time_panel()
 
+        # 載入遮罩（覆蓋整個中央 widget）
+        self.loading_overlay = LoadingOverlay(self.view)
+        self.loading_overlay.hide()
+        # 標記「使用者按下開始但模型還沒準備好」的 pending 狀態
+        self._pending_start: bool = False
+
         # ---- 狀態列 ----
         sb = QStatusBar()
         self.status_recognized = QLabel("等待開始…")
@@ -202,7 +295,7 @@ class MainWindow(QMainWindow):
         self.recognizer.text_committed.connect(self._on_text_committed)
         self.recognizer.hypothesis.connect(self._on_hypothesis)
         self.recognizer.model_loaded.connect(self._on_model_loaded)
-        self.recognizer.model_loading.connect(lambda s: self.status_model.setText(s))
+        self.recognizer.model_loading.connect(self._on_model_loading)
         self.recognizer.error.connect(self._on_recognizer_error)
 
         self.timer_ctrl.state_changed.connect(self.time_panel.update_state)
@@ -367,15 +460,30 @@ class MainWindow(QMainWindow):
         if self.transcript is None or not self.transcript.sentences:
             QMessageBox.information(self, "尚未載入講稿", "請先載入或貼上講稿。")
             return
-        # 啟動辨識（首次會載入模型）
+
         if not self.recognizer.is_running():
+            # 模型還沒載入 → 顯示遮罩、啟動載入、**不啟動計時**
+            self._pending_start = True
+            self.loading_overlay.set_status(
+                "正在載入語音辨識模型…",
+                f"模型：{self.cfg.model_size}（首次載入約需 10-30 秒）\n請稍候，模型就緒後會自動開始計時",
+            )
+            self.loading_overlay.show_over(self.view)
             self.recognizer.start(
                 model_size=self.cfg.model_size,
                 language=self.cfg.language,
                 compute_type=self.cfg.compute_type,
                 initial_prompt=self.transcript.full_text[:200],
             )
-        # 啟動麥克風
+            self.act_start.setText("⏸ 取消")
+            self.status_recognized.setText("載入模型中…")
+            return
+
+        # 模型已載入 → 直接啟動
+        self._really_start_session()
+
+    def _really_start_session(self) -> None:
+        """真正啟動：模型就緒後執行，啟動麥克風 + 計時。"""
         device = self.cfg.mic_device
         device_arg: int | str | None
         if device == "":
@@ -389,8 +497,16 @@ class MainWindow(QMainWindow):
         self.timer_ctrl.start()
         self.act_start.setText("⏸ 暫停")
         self.status_recognized.setText("辨識中…")
+        self._pending_start = False
 
     def _pause(self) -> None:
+        # 若模型還在載入中，點「取消」→ 取消 pending 狀態並隱藏遮罩
+        if self._pending_start and self.loading_overlay.isVisible():
+            self._pending_start = False
+            self.loading_overlay.fade_out_and_hide()
+            self.act_start.setText("▶ 開始")
+            self.status_recognized.setText("已取消載入")
+            return
         self.audio.stop()
         self.timer_ctrl.pause()
         self.act_start.setText("▶ 繼續")
@@ -559,8 +675,26 @@ class MainWindow(QMainWindow):
         if prompt:
             self.recognizer.update_prompt(prompt)
 
+    def _on_model_loading(self, msg: str) -> None:
+        """Whisper 發出的載入進度訊息（如「下載中」「載入中」）。"""
+        self.status_model.setText(msg)
+        # 載入遮罩顯示中時更新細節
+        if self.loading_overlay.isVisible():
+            self.loading_overlay.set_status("正在載入語音辨識模型…", msg)
+
     def _on_model_loaded(self, info: str) -> None:
+        """模型載入完成 → 隱藏遮罩 + 正式啟動會話。"""
         self.status_model.setText(f"模型: {self.cfg.model_size} ({info})")
+        if self.loading_overlay.isVisible():
+            self.loading_overlay.set_ready(f"設備：{info}  模型：{self.cfg.model_size}")
+            # 延遲 400ms 讓使用者看到「✅ 模型就緒」，然後淡出
+            QTimer.singleShot(400, self._begin_session_after_load)
+
+    def _begin_session_after_load(self) -> None:
+        self.loading_overlay.fade_out_and_hide()
+        if self._pending_start:
+            # 使用者當初有按開始 → 自動接手正式啟動計時
+            self._really_start_session()
 
     def _on_audio_error(self, msg: str) -> None:
         QMessageBox.warning(self, "麥克風錯誤", msg)
@@ -666,6 +800,9 @@ class MainWindow(QMainWindow):
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self._reposition_time_panel()
+        # 遮罩跟著 view 同大小
+        if hasattr(self, "loading_overlay") and self.loading_overlay.isVisible():
+            self.loading_overlay.resize(self.view.size())
 
     def closeEvent(self, event) -> None:
         self.audio.stop()
