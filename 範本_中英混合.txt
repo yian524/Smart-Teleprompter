@@ -1,0 +1,11 @@
+大家好，我是今天的報告人。今天要跟各位分享的主題是 Transformer 架構在自然語言處理的應用。
+
+首先，讓我們從背景談起。在 2017 年之前，NLP 任務主要依賴 RNN 和 LSTM 這類循序模型，但它們在處理長序列時有明顯的瓶頸。Google 團隊在 Attention Is All You Need 這篇論文中，提出了全新的 Transformer 架構，核心機制是 self-attention。
+
+這個架構的最大優勢在於，它能夠平行運算，訓練效率比傳統 RNN 高出非常多。此外，self-attention 可以直接捕捉任意兩個 token 之間的關聯，不受距離限制。
+
+在實作層面，我們使用 PyTorch 作為主要框架，搭配 Hugging Face 的 transformers 套件。訓練資料來自公開的 Common Crawl 語料，經過 tokenization 之後送入模型。我們採用 AdamW optimizer，learning rate 設定為 5e-5，batch size 是 32。
+
+實驗結果方面，我們的模型在 GLUE benchmark 上達到了 88.5 分，超越了 baseline BERT-base 大約 2.3 個百分點。在中文任務上，我們使用 CMRC 2018 作為評估資料集，F1 score 達到 85.2。
+
+最後是結論與未來展望。我們證明了 Transformer 架構在中英混合場景下依然有優秀的表現，未來會嘗試引入 multi-task learning 以及 prompt tuning 的技巧，進一步提升模型的 generalization 能力。謝謝大家，以上是我今天的報告，歡迎各位提問。

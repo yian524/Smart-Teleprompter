@@ -1,0 +1,76 @@
+/* 深色主題 — Smart Teleprompter */
+
+QMainWindow {
+    background-color: #1A1A1A;
+    color: #F0F0F0;
+}
+
+QToolBar {
+    background-color: #252525;
+    border: none;
+    spacing: 4px;
+    padding: 4px;
+}
+
+QToolBar QToolButton {
+    color: #E0E0E0;
+    background: transparent;
+    border: none;
+    padding: 6px 10px;
+    border-radius: 4px;
+    font-size: 13px;
+}
+
+QToolBar QToolButton:hover {
+    background-color: #3A3A3A;
+}
+
+QToolBar QToolButton:pressed {
+    background-color: #4A4A4A;
+}
+
+QStatusBar {
+    background-color: #252525;
+    color: #C0C0C0;
+}
+
+QStatusBar QLabel {
+    color: #C0C0C0;
+}
+
+QProgressBar {
+    background-color: #333;
+    border: none;
+    border-radius: 4px;
+    height: 8px;
+}
+
+QProgressBar::chunk {
+    background-color: #4CAF50;
+    border-radius: 4px;
+}
+
+QDialog, QInputDialog {
+    background-color: #2A2A2A;
+    color: #F0F0F0;
+}
+
+QLineEdit, QSpinBox, QComboBox, QFontComboBox {
+    background-color: #1E1E1E;
+    color: #F0F0F0;
+    border: 1px solid #3A3A3A;
+    border-radius: 3px;
+    padding: 4px 6px;
+}
+
+QPushButton {
+    background-color: #3A3A3A;
+    color: #F0F0F0;
+    border: none;
+    border-radius: 4px;
+    padding: 6px 14px;
+}
+
+QPushButton:hover {
+    background-color: #4A4A4A;
+}

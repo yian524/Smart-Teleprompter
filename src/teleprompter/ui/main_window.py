@@ -1,0 +1,676 @@
+"""主視窗：整合所有模組，提供工具列、快捷鍵、狀態列、時間面板。"""
+
+from __future__ import annotations
+
+import logging
+import time
+from dataclasses import replace as dataclass_replace
+from pathlib import Path
+
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import (
+    QAction,
+    QGuiApplication,
+    QIcon,
+    QKeySequence,
+    QShortcut,
+)
+from PySide6.QtWidgets import (
+    QFileDialog,
+    QFrame,
+    QHBoxLayout,
+    QInputDialog,
+    QLabel,
+    QMainWindow,
+    QMessageBox,
+    QProgressBar,
+    QStatusBar,
+    QToolBar,
+    QVBoxLayout,
+    QWidget,
+)
+
+from ..config import AppConfig, load_config, save_config
+from ..core.alignment_engine import AlignmentEngine
+from ..core.audio_capture import AudioCaptureController, AudioWindow
+from ..core.speech_recognizer import SpeechRecognizerController
+from ..core.timer_controller import PaceLight, TimeColor, TimerController, format_mmss
+from ..core.transcript_loader import Transcript, load_transcript, load_from_string
+from .prompter_view import PrompterView
+from .settings_dialog import SettingsDialog
+
+logger = logging.getLogger(__name__)
+
+
+PACE_TO_TEXT = {
+    PaceLight.GREEN: "節奏剛好",
+    PaceLight.BLUE: "稍快",
+    PaceLight.YELLOW: "稍慢",
+    PaceLight.GRAY: "—",
+}
+PACE_TO_COLOR = {
+    PaceLight.GREEN: "#4CAF50",
+    PaceLight.BLUE: "#2196F3",
+    PaceLight.YELLOW: "#FFC107",
+    PaceLight.GRAY: "#9E9E9E",
+}
+
+
+class TimePanel(QFrame):
+    """右上角的時間/語速資訊面板。"""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setStyleSheet(
+            "TimePanel { background-color: rgba(0,0,0,140); border-radius: 8px; }"
+            " QLabel { color: white; }"
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(2)
+
+        self.elapsed_label = QLabel("⏱ 00:00 / --:--")
+        self.elapsed_label.setStyleSheet("font-size: 16px; font-weight: 600;")
+        layout.addWidget(self.elapsed_label)
+
+        bottom = QHBoxLayout()
+        bottom.setSpacing(8)
+        self.remaining_label = QLabel("剩餘 --:--")
+        self.remaining_label.setStyleSheet("font-size: 14px;")
+        bottom.addWidget(self.remaining_label)
+
+        self.pace_dot = QLabel("●")
+        self.pace_dot.setStyleSheet("color: #9E9E9E; font-size: 18px;")
+        bottom.addWidget(self.pace_dot)
+
+        self.pace_text = QLabel("—")
+        self.pace_text.setStyleSheet("font-size: 12px; color: #BBBBBB;")
+        bottom.addWidget(self.pace_text)
+        bottom.addStretch(1)
+
+        layout.addLayout(bottom)
+
+    def update_state(self, state) -> None:
+        elapsed = format_mmss(state.elapsed_ms)
+        target = format_mmss(state.target_ms) if state.target_ms > 0 else "--:--"
+        self.elapsed_label.setText(f"⏱ {elapsed} / {target}")
+
+        if state.target_ms == 0:
+            self.remaining_label.setText("無目標時間")
+        elif state.overrun_ms > 0:
+            self.remaining_label.setText(f"超時 +{format_mmss(state.overrun_ms)}")
+        else:
+            self.remaining_label.setText(f"剩餘 {format_mmss(state.remaining_ms)}")
+
+        # 顏色
+        self.remaining_label.setStyleSheet(
+            f"font-size: 14px; color: {state.time_color.value}; font-weight: 600;"
+        )
+        self.pace_dot.setStyleSheet(
+            f"color: {PACE_TO_COLOR[state.pace]}; font-size: 18px;"
+        )
+        self.pace_text.setText(PACE_TO_TEXT[state.pace])
+
+    def flash(self) -> None:
+        """里程碑提示閃爍 1 秒。"""
+        original = self.styleSheet()
+        self.setStyleSheet(
+            "TimePanel { background-color: rgba(255,193,7,200); border-radius: 8px; }"
+            " QLabel { color: black; }"
+        )
+        QTimer.singleShot(900, lambda: self.setStyleSheet(original))
+
+
+class MainWindow(QMainWindow):
+    def __init__(self, config: AppConfig) -> None:
+        super().__init__()
+        self.cfg = config
+        self.transcript: Transcript | None = None
+
+        self.setWindowTitle("智能語音提詞機")
+        self.resize(1100, 700)
+
+        # ---- 元件 ----
+        self.engine = AlignmentEngine()
+        self.engine.apply_stability_mode(getattr(config, "stability_mode", "balanced"))
+        self.engine.set_max_forward_range(
+            max_sentences=getattr(config, "max_forward_sentences", 0),
+            max_chars=getattr(config, "max_forward_chars", 0),
+        )
+        self.audio = AudioCaptureController(self)
+        self.recognizer = SpeechRecognizerController(self)
+        self.timer_ctrl = TimerController(
+            target_sec=config.target_duration_sec,
+            milestones_sec=config.milestone_marks_sec,
+            parent=self,
+        )
+
+        self.view = PrompterView()
+        self.view.set_font_family(config.font_family)
+        self.view.set_font_size(config.font_size)
+        self.view.set_line_spacing(config.line_spacing)
+        self.view.set_animation_duration(config.karaoke_smooth_ms)
+        self.view.set_colors(
+            spoken=config.spoken_color,
+            upcoming=config.upcoming_color,
+            current=config.highlight_color,
+            skipped=config.skipped_color,
+        )
+        self.setCentralWidget(self.view)
+
+        # 右上角時間面板（疊在 view 上）
+        self.time_panel = TimePanel(self.view)
+        self.time_panel.adjustSize()
+        self._reposition_time_panel()
+
+        # ---- 狀態列 ----
+        sb = QStatusBar()
+        self.status_recognized = QLabel("等待開始…")
+        self.status_recognized.setStyleSheet("padding: 0 8px;")
+        sb.addWidget(self.status_recognized, 1)
+
+        # 引擎狀態：句子位置 + 信心 + 原因（生產級可見性）
+        self.status_engine = QLabel("📍 — / —  🎯 —")
+        self.status_engine.setStyleSheet("padding: 0 8px; color: #B0B0B0;")
+        sb.addPermanentWidget(self.status_engine)
+
+        self.status_model = QLabel("模型: 未載入")
+        sb.addPermanentWidget(self.status_model)
+
+        self.mic_level = QProgressBar()
+        self.mic_level.setRange(0, 100)
+        self.mic_level.setValue(0)
+        self.mic_level.setFixedWidth(120)
+        self.mic_level.setTextVisible(False)
+        sb.addPermanentWidget(QLabel("麥克風"))
+        sb.addPermanentWidget(self.mic_level)
+
+        self.setStatusBar(sb)
+
+        # ---- 工具列 ----
+        self._build_toolbar()
+        self._build_shortcuts()
+
+        # ---- Signal/Slot ----
+        self.audio.window_ready.connect(self._on_audio_window)
+        self.audio.level_changed.connect(self._on_mic_level)
+        self.audio.error.connect(self._on_audio_error)
+
+        self.recognizer.text_committed.connect(self._on_text_committed)
+        self.recognizer.hypothesis.connect(self._on_hypothesis)
+        self.recognizer.model_loaded.connect(self._on_model_loaded)
+        self.recognizer.model_loading.connect(lambda s: self.status_model.setText(s))
+        self.recognizer.error.connect(self._on_recognizer_error)
+
+        self.timer_ctrl.state_changed.connect(self.time_panel.update_state)
+        self.timer_ctrl.milestone_reached.connect(lambda _s: self.time_panel.flash())
+        self.timer_ctrl.time_up.connect(self._on_time_up)
+        self.timer_ctrl.set_progress_callback(self._script_progress)
+
+        self.view.position_clicked.connect(self._on_view_clicked)
+
+        # 軟推進追蹤（改用 hypothesis 訊號當語音指標，避免被噪音誤觸發）
+        self._last_hypothesis_time: float = 0.0
+        self._last_soft_advance_time: float = 0.0
+        self._soft_advance_timer = QTimer(self)
+        self._soft_advance_timer.setInterval(500)
+        self._soft_advance_timer.timeout.connect(self._maybe_soft_advance)
+        self._soft_advance_timer.start()
+
+        # 每 500ms 刷新 engine status bar（即使無新 commit，也讓「卡住秒數」動態更新）
+        self._status_refresh_timer = QTimer(self)
+        self._status_refresh_timer.setInterval(500)
+        self._status_refresh_timer.timeout.connect(self._refresh_engine_status)
+        self._status_refresh_timer.start()
+
+        # 還原視窗
+        if self.cfg.window_geometry:
+            try:
+                self.restoreGeometry(self.cfg.window_geometry)
+            except Exception:
+                pass
+        elif self.cfg.prefer_secondary_screen:
+            QTimer.singleShot(0, self._move_to_secondary_screen)
+
+        # 載入最近開啟的檔案
+        if self.cfg.last_transcript_path and Path(self.cfg.last_transcript_path).exists():
+            QTimer.singleShot(50, lambda: self.load_file(self.cfg.last_transcript_path))
+
+    # ---------- 介面建立 ----------
+
+    def _build_toolbar(self) -> None:
+        tb = QToolBar("主工具列")
+        tb.setMovable(False)
+        self.addToolBar(tb)
+
+        self.act_open = QAction("📂 開啟講稿", self)
+        self.act_open.setShortcut(QKeySequence.StandardKey.Open)
+        self.act_open.triggered.connect(self._open_file)
+        tb.addAction(self.act_open)
+
+        self.act_paste = QAction("📋 貼上文字", self)
+        self.act_paste.triggered.connect(self._paste_text)
+        tb.addAction(self.act_paste)
+
+        tb.addSeparator()
+
+        self.act_start = QAction("▶ 開始", self)
+        self.act_start.setShortcut(Qt.Key.Key_Space)
+        self.act_start.triggered.connect(self._toggle_run)
+        tb.addAction(self.act_start)
+
+        self.act_reset_pos = QAction("⤴ 回頂", self)
+        self.act_reset_pos.triggered.connect(self._reset_position)
+        tb.addAction(self.act_reset_pos)
+
+        self.act_clear_skipped = QAction("✖ 清除漏講標記", self)
+        self.act_clear_skipped.setShortcut("Ctrl+Shift+K")
+        self.act_clear_skipped.triggered.connect(self._clear_skipped)
+        tb.addAction(self.act_clear_skipped)
+
+        tb.addSeparator()
+
+        self.act_target = QAction("⏲ 設定時長", self)
+        self.act_target.setShortcut("Ctrl+T")
+        self.act_target.triggered.connect(self._ask_target_duration)
+        tb.addAction(self.act_target)
+
+        self.act_reset_timer = QAction("🔄 重置計時", self)
+        self.act_reset_timer.setShortcut("R")
+        self.act_reset_timer.triggered.connect(self.timer_ctrl.reset)
+        tb.addAction(self.act_reset_timer)
+
+        tb.addSeparator()
+
+        self.act_settings = QAction("⚙ 設定", self)
+        self.act_settings.triggered.connect(self._open_settings)
+        tb.addAction(self.act_settings)
+
+        self.act_fullscreen = QAction("⛶ 全螢幕", self)
+        self.act_fullscreen.setShortcut("F11")
+        self.act_fullscreen.triggered.connect(self._toggle_fullscreen)
+        tb.addAction(self.act_fullscreen)
+
+    def _build_shortcuts(self) -> None:
+        QShortcut(Qt.Key.Key_Up, self, activated=lambda: self._jump_relative(-1))
+        QShortcut(Qt.Key.Key_Down, self, activated=lambda: self._jump_relative(1))
+        QShortcut(QKeySequence("Ctrl++"), self, activated=lambda: self.view.set_font_size(self.view.font_size() + 2))
+        QShortcut(QKeySequence("Ctrl+="), self, activated=lambda: self.view.set_font_size(self.view.font_size() + 2))
+        QShortcut(QKeySequence("Ctrl+-"), self, activated=lambda: self.view.set_font_size(self.view.font_size() - 2))
+        QShortcut(Qt.Key.Key_T, self, activated=self._toggle_time_panel)
+        # 手動標漏講：把「上次標位置 → 目前位置」之間整段標為紅色刪除線
+        QShortcut(QKeySequence("Ctrl+K"), self, activated=self._manual_mark_skipped)
+        # 上次手動標漏講的起點（呼叫一次後更新）
+        self._last_manual_mark_pos: int = 0
+
+    # ---------- 載入講稿 ----------
+
+    def _open_file(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "開啟講稿",
+            str(Path(self.cfg.last_transcript_path).parent if self.cfg.last_transcript_path else Path.home()),
+            "講稿檔案 (*.txt *.md *.markdown *.docx);;所有檔案 (*.*)",
+        )
+        if path:
+            self.load_file(path)
+
+    def load_file(self, path: str | Path) -> None:
+        try:
+            transcript = load_transcript(path)
+        except Exception as e:
+            QMessageBox.critical(self, "載入失敗", f"無法載入檔案:\n{e}")
+            return
+        self._apply_transcript(transcript, source_path=str(path))
+
+    def _paste_text(self) -> None:
+        text, ok = QInputDialog.getMultiLineText(
+            self, "貼上講稿", "請貼上您的講稿文字："
+        )
+        if ok and text.strip():
+            transcript = load_from_string(text)
+            self._apply_transcript(transcript, source_path="")
+
+    def _apply_transcript(self, transcript: Transcript, *, source_path: str) -> None:
+        if not transcript.sentences:
+            QMessageBox.warning(self, "講稿為空", "未能解析出任何句子。")
+            return
+        self.transcript = transcript
+        self.engine.set_transcript(transcript)
+        self.view.set_text(transcript.full_text)
+        self.view.set_position(transcript.sentences[0].start, animate=False)
+        # 更新 initial_prompt
+        prompt = transcript.full_text[:200]
+        self.recognizer.update_prompt(prompt)
+        if source_path:
+            self.cfg = dataclass_replace(self.cfg, last_transcript_path=source_path)
+            save_config(self.cfg)
+            self.setWindowTitle(f"智能語音提詞機 — {Path(source_path).name}")
+        else:
+            self.setWindowTitle("智能語音提詞機 — (未命名)")
+        self.status_recognized.setText(
+            f"已載入 {len(transcript.sentences)} 句，{transcript.total_chars} 字。按空白鍵開始辨識。"
+        )
+
+    # ---------- 開始/暫停 ----------
+
+    def _toggle_run(self) -> None:
+        if self.audio.is_running():
+            self._pause()
+        else:
+            self._start()
+
+    def _start(self) -> None:
+        if self.transcript is None or not self.transcript.sentences:
+            QMessageBox.information(self, "尚未載入講稿", "請先載入或貼上講稿。")
+            return
+        # 啟動辨識（首次會載入模型）
+        if not self.recognizer.is_running():
+            self.recognizer.start(
+                model_size=self.cfg.model_size,
+                language=self.cfg.language,
+                compute_type=self.cfg.compute_type,
+                initial_prompt=self.transcript.full_text[:200],
+            )
+        # 啟動麥克風
+        device = self.cfg.mic_device
+        device_arg: int | str | None
+        if device == "":
+            device_arg = None
+        else:
+            try:
+                device_arg = int(device)
+            except ValueError:
+                device_arg = device
+        self.audio.start(device=device_arg)
+        self.timer_ctrl.start()
+        self.act_start.setText("⏸ 暫停")
+        self.status_recognized.setText("辨識中…")
+
+    def _pause(self) -> None:
+        self.audio.stop()
+        self.timer_ctrl.pause()
+        self.act_start.setText("▶ 繼續")
+        self.status_recognized.setText("已暫停。")
+
+    def _reset_position(self) -> None:
+        if not self.transcript or not self.transcript.sentences:
+            return
+        result = self.engine.jump_to_sentence(0)
+        self.view.set_position(result.global_char_pos, animate=False)
+        self.view.clear_skipped()
+
+    def _clear_skipped(self) -> None:
+        self.view.clear_skipped()
+
+    # ---------- 訊號處理 ----------
+
+    def _on_audio_window(self, window: AudioWindow) -> None:
+        self.recognizer.enqueue_window(window)
+
+    def _on_mic_level(self, level: float) -> None:
+        # 只更新麥克風強度條，不再用此判定語音活動（背景噪音會誤觸發）
+        self.mic_level.setValue(int(level * 100))
+
+    def _maybe_soft_advance(self) -> None:
+        """軟推進：依語速估算自動前進。預設關閉。
+
+        即使開啟也只在「卡住 ≥ 4 秒 + Whisper 持續產出 hypothesis」時才觸發，
+        避免在正常辨識循環中插入「人為推進」造成字幕被多推幾字。
+        """
+        if not getattr(self.cfg, "enable_soft_advance", False):
+            return
+        if self.transcript is None or not self.audio.is_running():
+            return
+        now = time.monotonic()
+        # Whisper 最近有持續產出文字 → 真實語音
+        if now - self._last_hypothesis_time > 1.5:
+            return
+        # 真的卡住才推：距離上次 commit ≥ 4 秒
+        if now - self.engine._last_commit_time < 4.0:
+            return
+        # 至少間隔 2 秒才能再推一次
+        if now - getattr(self, "_last_soft_advance_time", 0.0) < 2.0:
+            return
+        old_pos = self.engine.current_global_char
+        new_pos = self.engine.soft_time_advance(voice_active=True)
+        if new_pos != old_pos:
+            self.view.set_position(new_pos)
+            self._last_soft_advance_time = now
+
+    def _on_text_committed(self, delta: str) -> None:
+        """串流辨識器吐出新穩定下來的文字 → 推進對齊位置。"""
+        if self.transcript is None or not delta.strip():
+            return
+        result = self.engine.update(delta)
+        if result.updated:
+            if result.has_skipped:
+                marked = self.view.mark_skipped_ranges(result.skipped_ranges)
+                self.view.set_position(result.global_char_pos, animate=False)
+                if marked > 0:
+                    self._flash_skip_notice(marked)
+            else:
+                self.view.set_position(result.global_char_pos)
+        self._update_recognizer_prompt()
+        # 更新引擎狀態列（不論是否更新位置都顯示，讓使用者隨時可見引擎在做什麼）
+        self._update_engine_status(result)
+
+    def _refresh_engine_status(self) -> None:
+        """每 500ms 刷新引擎狀態（讓卡住秒數動態可見）。"""
+        if self.transcript is None:
+            return
+        from teleprompter.core.alignment_engine import AlignmentResult
+        dummy = AlignmentResult(
+            global_char_pos=self.engine.current_global_char,
+            sentence_index=self.engine.current_sentence_index,
+            confidence=0.0,
+            updated=False,
+            reason="(idle)",
+        )
+        self._update_engine_status(dummy)
+
+    def _update_engine_status(self, result) -> None:
+        if self.transcript is None:
+            return
+        total = len(self.transcript.sentences)
+        idx = self.engine.current_sentence_index
+        conf = result.confidence
+        reason = result.reason or ""
+        symbol = "✅" if result.updated else "⏸"
+        # 顯示距上次成功 commit 的秒數（讓使用者知道是否卡住）
+        stuck_s = max(0.0, time.monotonic() - self.engine._last_commit_time)
+        stuck_indicator = ""
+        if stuck_s > 1.0:
+            stuck_indicator = f"  ⚠ 卡 {stuck_s:.1f}s"
+        # 把難懂的 reason 翻成使用者語言
+        friendly = {
+            "high confidence": "高信心",
+            "mid confirmed": "中信心",
+            "mid (relaxed)": "中信心(放寬)",
+            "mid pending": "等待確認",
+            "low confidence ignored": "信心不足",
+            "globally ambiguous": "歧義(等更多字)",
+            "stuck-recovery (soft)": "卡住自救",
+            "stuck-recovery (hard)": "強力自救",
+            "boundary punctuation": "句末標點",
+            "internal error (state preserved)": "內部錯誤(已保護)",
+            "(idle)": "待機",
+        }
+        nice = friendly.get(reason, reason)
+        self.status_engine.setText(
+            f"📍 sent {idx + 1}/{total}  🎯 {conf:.0f}  {symbol} {nice}{stuck_indicator}"
+        )
+
+    def _manual_mark_skipped(self) -> None:
+        """Ctrl+K：使用者手動把「上次標位置 → 目前位置」之間標為漏講。"""
+        if self.transcript is None:
+            return
+        cur = self.engine.current_global_char
+        from_pos = self._last_manual_mark_pos
+        rng = self.engine.manual_mark_skipped_to_current(from_pos)
+        if rng is None:
+            self._flash_skip_notice(0)
+            self.status_recognized.setText("（無內容可標）")
+            return
+        s, e = rng
+        self.view.mark_skipped(s, e)
+        self._last_manual_mark_pos = cur
+        self._flash_skip_notice(e - s)
+
+    def _flash_skip_notice(self, char_count: int) -> None:
+        """status bar 顯示「漏講」提示 1.5 秒。"""
+        original = self.status_recognized.styleSheet()
+        self.status_recognized.setText(f"⚠ 偵測到漏講 {char_count} 字")
+        self.status_recognized.setStyleSheet(
+            "padding: 0 8px; color: white; background: #FF1744; font-weight: 600;"
+        )
+        QTimer.singleShot(
+            1500,
+            lambda: self.status_recognized.setStyleSheet(original),
+        )
+
+    def _on_hypothesis(self, text: str) -> None:
+        """串流辨識器目前的完整 hypothesis（含尾巴未穩定部分）→ 顯示在 status bar。
+
+        同時更新 _last_hypothesis_time 作為「真實語音活動」訊號（替代 mic_level，
+        因為 Whisper 對純背景噪音通常不會吐出文字）。
+        """
+        # 太短的輸出（< 2 字）視為雜訊，不更新語音活動時間
+        if text and len(text.strip()) >= 2:
+            self._last_hypothesis_time = time.monotonic()
+        snippet = text[-50:] if len(text) > 50 else text
+        self.status_recognized.setText(f"🎙 {snippet}")
+
+    def _update_recognizer_prompt(self) -> None:
+        """以「過去 100 字 + 未來 100 字」作為 Whisper 的 initial_prompt。
+
+        過去：保持上下文連貫；未來：讓 Whisper 預期下一段詞彙，提升專有名詞精度。
+        """
+        if self.transcript is None:
+            return
+        full = self.transcript.full_text
+        cur = self.engine.current_global_char
+        start = max(0, cur - 100)
+        end = min(len(full), cur + 100)
+        prompt = full[start:end]
+        if prompt:
+            self.recognizer.update_prompt(prompt)
+
+    def _on_model_loaded(self, info: str) -> None:
+        self.status_model.setText(f"模型: {self.cfg.model_size} ({info})")
+
+    def _on_audio_error(self, msg: str) -> None:
+        QMessageBox.warning(self, "麥克風錯誤", msg)
+        self._pause()
+
+    def _on_recognizer_error(self, msg: str) -> None:
+        QMessageBox.warning(self, "語音辨識錯誤", msg)
+
+    def _on_time_up(self) -> None:
+        self.time_panel.flash()
+        self.status_recognized.setText("⚠ 已達設定時長。")
+
+    def _on_view_clicked(self, global_char: int) -> None:
+        result = self.engine.jump_to_global_char(global_char)
+        self.view.set_position(result.global_char_pos, animate=False)
+
+    def _script_progress(self) -> float:
+        if self.transcript is None or self.transcript.total_chars == 0:
+            return 0.0
+        return self.engine.current_global_char / self.transcript.total_chars
+
+    # ---------- 動作 ----------
+
+    def _jump_relative(self, delta: int) -> None:
+        if self.transcript is None:
+            return
+        new_idx = self.engine.current_sentence_index + delta
+        result = self.engine.jump_to_sentence(new_idx)
+        self.view.set_position(result.global_char_pos)
+
+    def _toggle_time_panel(self) -> None:
+        self.time_panel.setVisible(not self.time_panel.isVisible())
+
+    def _toggle_fullscreen(self) -> None:
+        if self.isFullScreen():
+            self.showNormal()
+        else:
+            self.showFullScreen()
+
+    def _ask_target_duration(self) -> None:
+        seconds, ok = QInputDialog.getInt(
+            self,
+            "設定目標時長",
+            "請輸入目標報告時長（秒）：",
+            value=self.cfg.target_duration_sec,
+            minValue=0,
+            maxValue=7200,
+            step=30,
+        )
+        if ok:
+            self.cfg = dataclass_replace(self.cfg, target_duration_sec=seconds)
+            self.timer_ctrl.set_target_seconds(seconds)
+            save_config(self.cfg)
+
+    def _open_settings(self) -> None:
+        dlg = SettingsDialog(self.cfg, self)
+        if dlg.exec() == dlg.DialogCode.Accepted:
+            new_cfg = dlg.updated_config()
+            self.cfg = new_cfg
+            save_config(new_cfg)
+            self._apply_config_to_ui()
+
+    def _apply_config_to_ui(self) -> None:
+        self.view.set_font_family(self.cfg.font_family)
+        self.view.set_font_size(self.cfg.font_size)
+        self.view.set_line_spacing(self.cfg.line_spacing)
+        self.view.set_animation_duration(self.cfg.karaoke_smooth_ms)
+        self.view.set_colors(
+            spoken=self.cfg.spoken_color,
+            upcoming=self.cfg.upcoming_color,
+            current=self.cfg.highlight_color,
+            skipped=self.cfg.skipped_color,
+        )
+        self.timer_ctrl.set_target_seconds(self.cfg.target_duration_sec)
+        self.timer_ctrl.set_milestones(self.cfg.milestone_marks_sec)
+        # 套用穩定性模式 + 最大跳段範圍
+        self.engine.apply_stability_mode(getattr(self.cfg, "stability_mode", "balanced"))
+        self.engine.set_max_forward_range(
+            max_sentences=getattr(self.cfg, "max_forward_sentences", 0),
+            max_chars=getattr(self.cfg, "max_forward_chars", 0),
+        )
+
+    # ---------- 視窗 ----------
+
+    def _move_to_secondary_screen(self) -> None:
+        screens = QGuiApplication.screens()
+        if len(screens) < 2:
+            return
+        secondary = screens[1]
+        geo = secondary.availableGeometry()
+        self.move(geo.x() + 50, geo.y() + 50)
+        self.resize(min(self.width(), geo.width() - 100), min(self.height(), geo.height() - 100))
+
+    def _reposition_time_panel(self) -> None:
+        if not self.view:
+            return
+        margin = 12
+        self.time_panel.adjustSize()
+        x = self.view.width() - self.time_panel.width() - margin
+        self.time_panel.move(max(0, x), margin)
+        self.time_panel.raise_()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._reposition_time_panel()
+
+    def closeEvent(self, event) -> None:
+        self.audio.stop()
+        self.recognizer.stop()
+        self.timer_ctrl.pause()
+        self.cfg = dataclass_replace(self.cfg, window_geometry=bytes(self.saveGeometry()))
+        save_config(self.cfg)
+        super().closeEvent(event)

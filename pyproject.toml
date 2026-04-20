@@ -1,0 +1,44 @@
+[project]
+name = "smart-teleprompter"
+version = "0.1.0"
+description = "智能語音提詞機 — 即時語音辨識自動對齊講稿，支援卡拉OK 式逐字高亮"
+readme = "README.md"
+requires-python = ">=3.10,<3.14"
+authors = [{ name = "Smart Teleprompter Team" }]
+
+dependencies = [
+    "PySide6>=6.6.0",
+    "faster-whisper>=1.0.0",
+    "sounddevice>=0.4.6",
+    "numpy>=1.24",
+    "webrtcvad-wheels>=2.0.14; python_version >= '3.12'",
+    "webrtcvad>=2.0.10; python_version < '3.12'",
+    "rapidfuzz>=3.6.0",
+    "python-docx>=1.1.0",
+    "markdown-it-py>=3.0.0",
+    "pypinyin>=0.50.0",
+    # Windows 上 ctranslate2 4.x 需要這兩個 NVIDIA pip 套件提供 cuBLAS / cuDNN DLL
+    "nvidia-cublas-cu12>=12.0; sys_platform == 'win32'",
+    "nvidia-cudnn-cu12>=9.0; sys_platform == 'win32'",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+    "pytest-qt>=4.3",
+    "pyinstaller>=6.3",
+]
+
+[project.scripts]
+teleprompter = "teleprompter.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/teleprompter"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
