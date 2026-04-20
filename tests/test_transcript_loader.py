@@ -120,3 +120,94 @@ def test_load_unsupported_extension_falls_back_to_txt(tmp_path: Path):
 def test_file_not_found(tmp_path: Path):
     with pytest.raises(FileNotFoundError):
         load_transcript(tmp_path / "nope.txt")
+
+
+# ============================================================
+# 註解 + 分頁功能
+# ============================================================
+
+def test_html_comments_are_stripped():
+    from teleprompter.core.transcript_loader import strip_comments
+    text = "第一句。<!-- 這是註解 -->第二句。"
+    cleaned = strip_comments(text)
+    assert "<!--" not in cleaned
+    assert "註解" not in cleaned
+    assert "第一句" in cleaned
+    assert "第二句" in cleaned
+
+
+def test_multiline_comments_stripped():
+    from teleprompter.core.transcript_loader import strip_comments
+    text = "第一句。<!-- 這是\n多行\n註解 -->第二句。"
+    cleaned = strip_comments(text)
+    assert "第一句" in cleaned
+    assert "第二句" in cleaned
+    assert "註解" not in cleaned
+
+
+def test_page_separator_creates_pages():
+    text = (
+        "第一頁第一句。第一頁第二句。\n"
+        "---\n"
+        "第二頁第一句。第二頁第二句。\n"
+        "---\n"
+        "第三頁第一句。"
+    )
+    t = load_from_string(text)
+    assert len(t.pages) == 3
+    assert t.pages[0].number == 1
+    assert t.pages[1].number == 2
+    assert t.pages[2].number == 3
+
+
+def test_no_separator_single_page():
+    t = load_from_string("第一句。第二句。第三句。")
+    assert len(t.pages) == 1
+    assert t.pages[0].number == 1
+
+
+def test_page_of_sentence_lookup():
+    text = (
+        "甲頁第一句。甲頁第二句。\n"
+        "---\n"
+        "乙頁第一句。乙頁第二句。"
+    )
+    t = load_from_string(text)
+    # 前 2 句屬 page 1
+    p = t.page_of_sentence(0)
+    assert p is not None
+    assert p.number == 1
+    # 後 2 句屬 page 2
+    p2 = t.page_of_sentence(2)
+    assert p2 is not None
+    assert p2.number == 2
+
+
+def test_comment_and_page_together():
+    text = (
+        "<!-- 這段會被忽略 -->\n"
+        "第一頁內容。\n"
+        "---\n"
+        "<!-- 對應 slide 2 -->\n"
+        "第二頁內容。"
+    )
+    t = load_from_string(text)
+    assert len(t.pages) == 2
+    # 註解不該出現在 sentences
+    for s in t.sentences:
+        assert "忽略" not in s.text
+        assert "slide 2" not in s.text
+
+
+def test_page_title_extracted_from_heading():
+    text = (
+        "# 背景介紹\n"
+        "這是第一頁內容。\n"
+        "---\n"
+        "# 方法論\n"
+        "這是第二頁內容。"
+    )
+    t = load_from_string(text)
+    assert len(t.pages) == 2
+    assert "背景" in t.pages[0].title or "介紹" in t.pages[0].title
+    assert "方法" in t.pages[1].title

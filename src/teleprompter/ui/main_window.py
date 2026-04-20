@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QProgressBar,
+    QStackedWidget,
     QStatusBar,
     QToolBar,
     QVBoxLayout,
@@ -38,6 +39,7 @@ from ..core.speech_recognizer import SpeechRecognizerController
 from ..core.timer_controller import PaceLight, TimeColor, TimerController, format_mmss
 from ..core.transcript_loader import Transcript, load_transcript, load_from_string
 from .prompter_view import PrompterView
+from .qa_panel import QAPanel
 from .settings_dialog import SettingsDialog
 
 logger = logging.getLogger(__name__)
@@ -163,6 +165,11 @@ class TimePanel(QFrame):
         self.elapsed_label.setStyleSheet("font-size: 16px; font-weight: 600;")
         layout.addWidget(self.elapsed_label)
 
+        # 投影片頁碼（由 main_window 更新）
+        self.slide_label = QLabel("")
+        self.slide_label.setStyleSheet("font-size: 13px; color: #80D8FF;")
+        layout.addWidget(self.slide_label)
+
         bottom = QHBoxLayout()
         bottom.setSpacing(8)
         self.remaining_label = QLabel("剩餘 --:--")
@@ -179,6 +186,18 @@ class TimePanel(QFrame):
         bottom.addStretch(1)
 
         layout.addLayout(bottom)
+
+    def set_slide(self, current: int, total: int, title: str = "") -> None:
+        """顯示當前投影片頁碼。若 total==0 隱藏。"""
+        if total <= 0:
+            self.slide_label.setText("")
+            self.slide_label.hide()
+            return
+        if title:
+            self.slide_label.setText(f"📄 Slide {current}/{total} · {title}")
+        else:
+            self.slide_label.setText(f"📄 Slide {current}/{total}")
+        self.slide_label.show()
 
     def update_state(self, state) -> None:
         elapsed = format_mmss(state.elapsed_ms)
@@ -246,7 +265,13 @@ class MainWindow(QMainWindow):
             current=config.highlight_color,
             skipped=config.skipped_color,
         )
-        self.setCentralWidget(self.view)
+        # 中央用 StackedWidget 切換「提詞模式」與「Q&A 模式」
+        self.central_stack = QStackedWidget()
+        self.central_stack.addWidget(self.view)            # index 0: prompter
+        self.qa_panel = QAPanel()
+        self.central_stack.addWidget(self.qa_panel)        # index 1: Q&A
+        self.qa_panel.close_qa_mode.connect(self._exit_qa_mode)
+        self.setCentralWidget(self.central_stack)
 
         # 右上角時間面板（疊在 view 上）
         self.time_panel = TimePanel(self.view)
@@ -387,6 +412,14 @@ class MainWindow(QMainWindow):
         self.act_fullscreen.triggered.connect(self._toggle_fullscreen)
         tb.addAction(self.act_fullscreen)
 
+        tb.addSeparator()
+
+        self.act_qa_mode = QAction("🎤 Q&A 模式", self)
+        self.act_qa_mode.setShortcut("Ctrl+Q")
+        self.act_qa_mode.setCheckable(True)
+        self.act_qa_mode.triggered.connect(self._toggle_qa_mode)
+        tb.addAction(self.act_qa_mode)
+
     def _build_shortcuts(self) -> None:
         QShortcut(Qt.Key.Key_Up, self, activated=lambda: self._jump_relative(-1))
         QShortcut(Qt.Key.Key_Down, self, activated=lambda: self._jump_relative(1))
@@ -444,8 +477,9 @@ class MainWindow(QMainWindow):
             self.setWindowTitle(f"智能語音提詞機 — {Path(source_path).name}")
         else:
             self.setWindowTitle("智能語音提詞機 — (未命名)")
+        page_info = f"，{len(transcript.pages)} 頁" if transcript.pages else ""
         self.status_recognized.setText(
-            f"已載入 {len(transcript.sentences)} 句，{transcript.total_chars} 字。按空白鍵開始辨識。"
+            f"已載入 {len(transcript.sentences)} 句{page_info}，{transcript.total_chars} 字。按空白鍵開始辨識。"
         )
 
     # ---------- 開始/暫停 ----------
@@ -559,7 +593,13 @@ class MainWindow(QMainWindow):
 
     def _on_text_committed(self, delta: str) -> None:
         """串流辨識器吐出新穩定下來的文字 → 推進對齊位置。"""
-        if self.transcript is None or not delta.strip():
+        if not delta.strip():
+            return
+        # Q&A 模式：文字路由到 Q&A 面板，不推進提詞位置
+        if self.central_stack.currentIndex() == 1:
+            self.qa_panel.append_recognized(delta)
+            return
+        if self.transcript is None:
             return
         result = self.engine.update(delta)
         if result.updated:
@@ -619,6 +659,14 @@ class MainWindow(QMainWindow):
         self.status_engine.setText(
             f"📍 sent {idx + 1}/{total}  🎯 {conf:.0f}  {symbol} {nice}{stuck_indicator}"
         )
+        # 更新投影片頁碼顯示
+        page = self.transcript.page_of_sentence(idx)
+        if page and self.transcript.pages:
+            self.time_panel.set_slide(
+                page.number, len(self.transcript.pages), page.title
+            )
+        else:
+            self.time_panel.set_slide(0, 0)
 
     def _manual_mark_skipped(self) -> None:
         """Ctrl+K：使用者手動把「上次標位置 → 目前位置」之間標為漏講。"""
@@ -733,6 +781,26 @@ class MainWindow(QMainWindow):
             self.showNormal()
         else:
             self.showFullScreen()
+
+    def _toggle_qa_mode(self) -> None:
+        """切換 Q&A 模式：中央切到 QAPanel，辨識文字路由到 Q&A 面板。"""
+        if self.central_stack.currentIndex() == 1:
+            self._exit_qa_mode()
+        else:
+            self._enter_qa_mode()
+
+    def _enter_qa_mode(self) -> None:
+        self.central_stack.setCurrentIndex(1)
+        self.act_qa_mode.setChecked(True)
+        self.act_qa_mode.setText("🎤 Q&A 模式 (ON)")
+        self.timer_ctrl.pause()
+        self.status_recognized.setText("Q&A 模式：辨識文字將路由到 Q&A 面板")
+
+    def _exit_qa_mode(self) -> None:
+        self.central_stack.setCurrentIndex(0)
+        self.act_qa_mode.setChecked(False)
+        self.act_qa_mode.setText("🎤 Q&A 模式")
+        self.status_recognized.setText("已回到提詞模式")
 
     def _ask_target_duration(self) -> None:
         seconds, ok = QInputDialog.getInt(

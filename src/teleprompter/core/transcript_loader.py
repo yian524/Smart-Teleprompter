@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Optional
 
 # 中英混合句子終止標點
 _SENT_TERMINATORS = "。！？!?；;"
@@ -50,15 +51,36 @@ class Sentence:
 
 
 @dataclass
+class Page:
+    """投影片分頁（對應 --- 分隔符劃分的區段）。"""
+
+    number: int                     # 1-based 頁碼
+    sentence_start: int             # 在 Transcript.sentences 中的起始索引
+    sentence_end: int               # 結束索引（不含）
+    title: str = ""                 # 選用的頁面標題（註解提取或使用者標示）
+
+    def contains_sentence(self, sent_idx: int) -> bool:
+        return self.sentence_start <= sent_idx < self.sentence_end
+
+
+@dataclass
 class Transcript:
-    """完整講稿（句子列表 + 全文）。"""
+    """完整講稿（句子列表 + 全文 + 分頁）。"""
 
     sentences: list[Sentence] = field(default_factory=list)
     full_text: str = ""
+    pages: list[Page] = field(default_factory=list)
 
     @property
     def total_chars(self) -> int:
         return len(self.full_text)
+
+    def page_of_sentence(self, sent_idx: int) -> Optional[Page]:
+        """查某句屬於哪一頁。若無分頁，回傳 None。"""
+        for p in self.pages:
+            if p.contains_sentence(sent_idx):
+                return p
+        return None
 
 
 def _is_kept(ch: str) -> bool:
@@ -212,8 +234,7 @@ def load_md(path: Path) -> str:
     # 列表符號
     text = re.sub(r"^[\s]*[-*+]\s+", "", text, flags=re.MULTILINE)
     text = re.sub(r"^[\s]*\d+\.\s+", "", text, flags=re.MULTILINE)
-    # 水平線
-    text = re.sub(r"^[\s]*[-*_]{3,}[\s]*$", "", text, flags=re.MULTILINE)
+    # 水平線 --- / === / *** 作為「分頁符」保留（不刪除）
     # 多重空行壓縮
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
@@ -235,6 +256,96 @@ def load_docx(path: Path) -> str:
     return "\n".join(paragraphs)
 
 
+# ============================================================
+# 講稿預處理：註解剝除 + 分頁識別
+# ============================================================
+
+# HTML 風格註解：<!-- ... --> （可跨行，不影響提詞）
+_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+# 分頁分隔符：一行裡只有 --- 或 === 或 ***（前後可有空白）
+_PAGE_SEPARATOR_RE = re.compile(r"^\s*(?:---+|===+|\*\*\*+)\s*$", re.MULTILINE)
+
+
+def strip_comments(text: str) -> str:
+    """剝除 <!-- 註解 --> 但保留其他文字。"""
+    return _COMMENT_RE.sub("", text)
+
+
+def _split_by_pages(text: str) -> list[str]:
+    """依 --- 分頁符號切分文字。若無分頁符號則回傳單元素 list。"""
+    # 把連續的 \n---\n 變成唯一分隔符
+    parts = _PAGE_SEPARATOR_RE.split(text)
+    # 過濾全空白段
+    return [p for p in parts if p.strip()]
+
+
+def _extract_page_title(page_text: str) -> str:
+    """取頁面標題：優先取第一個 Markdown 標題 `# xxx`，否則第一行前 20 字。
+
+    跳過分頁符號本身（---、===、***）與空行。
+    """
+    for line in page_text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        # 跳過分頁符號
+        if _PAGE_SEPARATOR_RE.match(line):
+            continue
+        # Markdown 標題
+        if line.startswith("#"):
+            return line.lstrip("# ").strip()[:40]
+        # 一般第一行
+        return line[:20]
+    return ""
+
+
+def parse_transcript(text: str) -> Transcript:
+    """統一解析：剝除註解 → 切分頁 → 切句 → 建立 Page 對映。"""
+    # 1. 剝除註解
+    text = strip_comments(text)
+    # 2. 切分頁（保留原文以供 full_text）
+    # 先把 page separator 轉為一行空白（保留位置不變），這樣句子索引仍與原文一致
+    # 策略：找出每個 separator 的位置，用其為分界
+    matches = list(_PAGE_SEPARATOR_RE.finditer(text))
+    # 用 match 位置切分 sentence ranges
+    sentences = split_sentences(text)
+
+    pages: list[Page] = []
+    if not matches:
+        # 無分頁符 → 全部歸為單頁
+        if sentences:
+            pages.append(Page(number=1, sentence_start=0, sentence_end=len(sentences), title=""))
+    else:
+        # 有分頁符 → 按字元位置分頁
+        page_boundaries_chars = [0] + [m.start() for m in matches] + [len(text)]
+        for i in range(len(page_boundaries_chars) - 1):
+            page_start_char = page_boundaries_chars[i]
+            page_end_char = page_boundaries_chars[i + 1]
+            # 找該字元範圍內的句子
+            sent_start_idx = None
+            sent_end_idx = len(sentences)
+            for si, s in enumerate(sentences):
+                if s.start >= page_start_char and sent_start_idx is None:
+                    sent_start_idx = si
+                if s.start >= page_end_char:
+                    sent_end_idx = si
+                    break
+            if sent_start_idx is None:
+                continue  # 此頁沒有任何句子（分頁符之間只有空白）
+            if sent_end_idx <= sent_start_idx:
+                continue
+            page_text = text[page_start_char:page_end_char]
+            title = _extract_page_title(page_text)
+            pages.append(Page(
+                number=len(pages) + 1,
+                sentence_start=sent_start_idx,
+                sentence_end=sent_end_idx,
+                title=title,
+            ))
+
+    return Transcript(sentences=sentences, full_text=text, pages=pages)
+
+
 def load_transcript(path: str | Path) -> Transcript:
     """主要入口：依副檔名選擇載入器，回傳 Transcript。"""
     path = Path(path)
@@ -249,14 +360,11 @@ def load_transcript(path: str | Path) -> Transcript:
     elif suffix in (".txt", ""):
         text = load_txt(path)
     else:
-        # 未知格式嘗試當純文字讀
         text = load_txt(path)
 
-    sentences = split_sentences(text)
-    return Transcript(sentences=sentences, full_text=text)
+    return parse_transcript(text)
 
 
 def load_from_string(text: str) -> Transcript:
     """直接從字串載入（貼上文字使用）。"""
-    sentences = split_sentences(text)
-    return Transcript(sentences=sentences, full_text=text)
+    return parse_transcript(text)
