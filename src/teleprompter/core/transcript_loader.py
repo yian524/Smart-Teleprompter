@@ -162,14 +162,29 @@ def _make_sentence(raw: str, global_start: int, global_end: int) -> Sentence:
 
 
 def split_sentences(text: str) -> list[Sentence]:
-    """將文字切成句子，保留每個句子在全文中的索引。"""
+    """將文字切成句子，保留每個句子在全文中的索引。
+
+    跳過：
+    - 空白行
+    - Markdown 標題行（以 #, ##, ### 開頭）—— 標題作為頁面元資訊，不做為講稿內容
+    - 分頁符號行（---, ===, ***）
+    """
     sentences: list[Sentence] = []
     if not text:
         return sentences
 
     pos = 0
     for line in text.split("\n"):
-        if not line.strip():
+        stripped = line.strip()
+        if not stripped:
+            pos += len(line) + 1
+            continue
+        # 跳過 Markdown 標題（當作頁面 metadata，不當講稿）
+        if stripped.startswith("#"):
+            pos += len(line) + 1
+            continue
+        # 跳過分頁符號
+        if _PAGE_SEPARATOR_RE.match(line):
             pos += len(line) + 1
             continue
         line_pos = 0

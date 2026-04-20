@@ -37,7 +37,8 @@ def _has_english(text: str) -> bool:
 class TranslatorWorker(QObject):
     translated = Signal(str, str)  # (source_text, translated_text)
     error = Signal(str)
-    engine_ready = Signal(str)  # emit engine name when ready
+    engine_ready = Signal(str)         # engine name when ready
+    status_changed = Signal(str)       # human-readable progress text
 
     def __init__(self) -> None:
         super().__init__()
@@ -95,41 +96,48 @@ class TranslatorWorker(QObject):
 
     def _init_engines(self) -> None:
         # 嘗試載入 Argos Translate
+        self.status_changed.emit("初始化翻譯引擎…")
         try:
             import argostranslate.package as ap
             import argostranslate.translate as at
-            # 檢查 en→zh 模型是否已安裝
             installed_languages = at.get_installed_languages()
             langs = {lang.code: lang for lang in installed_languages}
             if "en" in langs and "zh" in langs:
                 self._argos_ready = True
+                self.status_changed.emit("Argos 模型已就緒")
             else:
-                # 嘗試下載
+                # 首次使用：下載 en→zh 模型（約 100MB）
+                self.status_changed.emit("首次使用：下載翻譯模型中（約 100MB）…")
                 logger.info("Argos: 下載 en→zh 模型中…")
                 ap.update_package_index()
                 for pkg in ap.get_available_packages():
                     if pkg.from_code == "en" and pkg.to_code == "zh":
+                        self.status_changed.emit(f"下載 {pkg} 中…")
                         ap.install_from_path(pkg.download())
                         self._argos_ready = True
                         break
             if self._argos_ready:
                 logger.info("Argos en→zh 就緒")
-                # 簡→繁轉換
+                self.status_changed.emit("載入繁體中文轉換器…")
                 try:
                     from opencc import OpenCC
                     self._s2tw = OpenCC("s2tw")
                 except Exception as e:
                     logger.warning("opencc 不可用，保留簡體: %s", e)
                 self.engine_ready.emit("Argos (離線)")
+                self.status_changed.emit("翻譯引擎就緒")
                 return
         except Exception as e:
             logger.warning("Argos 初始化失敗: %s", e)
+            self.status_changed.emit(f"Argos 失敗，切換到 Google: {e}")
 
         # Fallback: Google Translate
         try:
             from deep_translator import GoogleTranslator  # noqa
             self.engine_ready.emit("Google (線上)")
+            self.status_changed.emit("使用 Google Translate（需網路）")
         except ImportError:
+            self.engine_ready.emit("翻譯不可用")
             self.error.emit("翻譯引擎無法載入（Argos 與 Google 都失敗）")
 
     def _translate(self, text: str) -> str:
@@ -156,6 +164,7 @@ class TranslatorController(QObject):
     translated = Signal(str, str)
     error = Signal(str)
     engine_ready = Signal(str)
+    status_changed = Signal(str)
 
     def __init__(self, parent: Optional[QObject] = None) -> None:
         super().__init__(parent)
@@ -176,6 +185,7 @@ class TranslatorController(QObject):
         self._worker.translated.connect(self.translated)
         self._worker.error.connect(self.error)
         self._worker.engine_ready.connect(self.engine_ready)
+        self._worker.status_changed.connect(self.status_changed)
         self._thread.start()
 
     def translate(self, text: str) -> None:

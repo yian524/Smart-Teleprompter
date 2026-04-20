@@ -125,6 +125,7 @@ class QAPanel(QWidget):
         self.translator.translated.connect(self._on_translation_ready)
         self.translator.error.connect(self._on_translate_error)
         self.translator.engine_ready.connect(self._on_translator_ready)
+        self.translator.status_changed.connect(self._on_translator_status)
 
         # 匹配信心顯示
         self.match_info = QLabel("")
@@ -268,6 +269,14 @@ class QAPanel(QWidget):
 
     def _on_translator_ready(self, engine_name: str) -> None:
         self.translation_label.setText(f"🌐 中文翻譯（引擎：{engine_name}）")
+
+    def _on_translator_status(self, status_text: str) -> None:
+        """載入進度 / 狀態提示（讓使用者知道下載進度等）。"""
+        if self.translation_text.isVisible():
+            # 若翻譯尚未就緒，把狀態顯示為暫時內容
+            cur = self.translation_text.toPlainText()
+            if not cur or cur.startswith("(") or cur.startswith("…"):
+                self.translation_text.setPlainText(f"… {status_text}")
 
     def _refresh_match(self) -> None:
         if not self.library.items or not self._recognized_accum:
