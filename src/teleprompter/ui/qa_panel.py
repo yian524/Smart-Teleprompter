@@ -14,6 +14,7 @@ from typing import Optional
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -30,8 +31,9 @@ from ..core.translator import TranslatorController
 class QAPanel(QWidget):
     """Q&A 模式主面板。"""
 
-    qa_loaded = Signal(int)         # emit 載入的 QA 數量
-    close_qa_mode = Signal()         # 使用者按「結束 Q&A」
+    qa_loaded = Signal(int)
+    close_qa_mode = Signal()
+    language_changed = Signal(str)   # 'zh' / 'en' / 'auto'
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -67,8 +69,18 @@ class QAPanel(QWidget):
         self.clear_btn.clicked.connect(self._on_clear_clicked)
         toolbar.addWidget(self.clear_btn)
 
+        # 辨識語言下拉（Q&A 時觀眾可能講英文或中文）
+        self.lang_combo = QComboBox()
+        self.lang_combo.addItem("🇹🇼 中文", "zh")
+        self.lang_combo.addItem("🇺🇸 英文", "en")
+        self.lang_combo.addItem("🌍 自動偵測", "auto")
+        self.lang_combo.setCurrentIndex(2)  # 預設 auto（適合國際會議）
+        self.lang_combo.currentIndexChanged.connect(self._on_lang_changed)
+        toolbar.addWidget(QLabel("辨識語言"))
+        toolbar.addWidget(self.lang_combo)
+
         # 翻譯開關
-        self.translate_check = QCheckBox("🌐 英→中翻譯")
+        self.translate_check = QCheckBox("🌐 翻譯中文")
         self.translate_check.setStyleSheet("color: #80D8FF;")
         self.translate_check.toggled.connect(self._on_translate_toggled)
         toolbar.addWidget(self.translate_check)
@@ -179,6 +191,12 @@ class QAPanel(QWidget):
         # 若啟用翻譯 → 送去翻譯
         if self.translate_check.isChecked() and self.translator.is_running():
             self.translator.translate(self._recognized_accum)
+
+    def get_language(self) -> str:
+        return self.lang_combo.currentData() or "auto"
+
+    def _on_lang_changed(self) -> None:
+        self.language_changed.emit(self.get_language())
 
     def _on_translate_toggled(self, checked: bool) -> None:
         self.translation_label.setVisible(checked)

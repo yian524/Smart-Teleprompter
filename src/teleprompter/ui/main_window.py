@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QProgressBar,
-    QStackedWidget,
+    QSplitter,
     QStatusBar,
     QToolBar,
     QVBoxLayout,
@@ -146,46 +146,44 @@ class LoadingOverlay(QFrame):
 
 
 class TimePanel(QFrame):
-    """右上角的時間/語速資訊面板。"""
+    """頂部橫向時間/語速/投影片資訊 bar（不再 overlay 遮到講稿）。"""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setFixedHeight(42)
         self.setStyleSheet(
-            "TimePanel { background-color: rgba(0,0,0,140); border-radius: 8px; }"
+            "TimePanel { background-color: #252525; border-bottom: 1px solid #3A3A3A; }"
             " QLabel { color: white; }"
         )
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 8, 12, 8)
-        layout.setSpacing(2)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(16, 4, 16, 4)
+        layout.setSpacing(16)
 
         self.elapsed_label = QLabel("⏱ 00:00 / --:--")
-        self.elapsed_label.setStyleSheet("font-size: 16px; font-weight: 600;")
+        self.elapsed_label.setStyleSheet("font-size: 15px; font-weight: 600;")
         layout.addWidget(self.elapsed_label)
 
-        # 投影片頁碼（由 main_window 更新）
-        self.slide_label = QLabel("")
-        self.slide_label.setStyleSheet("font-size: 13px; color: #80D8FF;")
-        layout.addWidget(self.slide_label)
-
-        bottom = QHBoxLayout()
-        bottom.setSpacing(8)
         self.remaining_label = QLabel("剩餘 --:--")
         self.remaining_label.setStyleSheet("font-size: 14px;")
-        bottom.addWidget(self.remaining_label)
+        layout.addWidget(self.remaining_label)
 
         self.pace_dot = QLabel("●")
-        self.pace_dot.setStyleSheet("color: #9E9E9E; font-size: 18px;")
-        bottom.addWidget(self.pace_dot)
+        self.pace_dot.setStyleSheet("color: #9E9E9E; font-size: 16px;")
+        layout.addWidget(self.pace_dot)
 
         self.pace_text = QLabel("—")
         self.pace_text.setStyleSheet("font-size: 12px; color: #BBBBBB;")
-        bottom.addWidget(self.pace_text)
-        bottom.addStretch(1)
+        layout.addWidget(self.pace_text)
 
-        layout.addLayout(bottom)
+        layout.addStretch(1)
+
+        # 投影片頁碼
+        self.slide_label = QLabel("")
+        self.slide_label.setStyleSheet("font-size: 14px; color: #80D8FF; font-weight: 600;")
+        layout.addWidget(self.slide_label)
 
     def set_slide(self, current: int, total: int, title: str = "") -> None:
         """顯示當前投影片頁碼。若 total==0 隱藏。"""
@@ -265,20 +263,31 @@ class MainWindow(QMainWindow):
             current=config.highlight_color,
             skipped=config.skipped_color,
         )
-        # 中央用 StackedWidget 切換「提詞模式」與「Q&A 模式」
-        self.central_stack = QStackedWidget()
-        self.central_stack.addWidget(self.view)            # index 0: prompter
+        # 中央布局：頂部時間 bar + 下方 splitter (左提詞 / 右 Q&A)
+        central_wrap = QWidget()
+        central_layout = QVBoxLayout(central_wrap)
+        central_layout.setContentsMargins(0, 0, 0, 0)
+        central_layout.setSpacing(0)
+
+        # 時間/投影片資訊頂部 bar
+        self.time_panel = TimePanel(central_wrap)
+        central_layout.addWidget(self.time_panel)
+
+        # 水平 splitter：左=提詞、右=Q&A（預設收起）
+        self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.main_splitter.addWidget(self.view)
         self.qa_panel = QAPanel()
-        self.central_stack.addWidget(self.qa_panel)        # index 1: Q&A
         self.qa_panel.close_qa_mode.connect(self._exit_qa_mode)
-        self.setCentralWidget(self.central_stack)
+        self.qa_panel.language_changed.connect(self._switch_recognizer_language)
+        self.main_splitter.addWidget(self.qa_panel)
+        self.main_splitter.setStretchFactor(0, 3)
+        self.main_splitter.setStretchFactor(1, 2)
+        self.qa_panel.hide()                          # 預設不顯示，按 Q&A 模式才展開
+        central_layout.addWidget(self.main_splitter, 1)
 
-        # 右上角時間面板（疊在 view 上）
-        self.time_panel = TimePanel(self.view)
-        self.time_panel.adjustSize()
-        self._reposition_time_panel()
+        self.setCentralWidget(central_wrap)
 
-        # 載入遮罩（覆蓋整個中央 widget）
+        # 載入遮罩（覆蓋在 view 上）
         self.loading_overlay = LoadingOverlay(self.view)
         self.loading_overlay.hide()
         # 標記「使用者按下開始但模型還沒準備好」的 pending 狀態
@@ -595,9 +604,10 @@ class MainWindow(QMainWindow):
         """串流辨識器吐出新穩定下來的文字 → 推進對齊位置。"""
         if not delta.strip():
             return
-        # Q&A 模式：文字路由到 Q&A 面板，不推進提詞位置
-        if self.central_stack.currentIndex() == 1:
+        # Q&A 模式啟用中：文字同時路由到 Q&A 面板
+        if self.qa_panel.isVisible():
             self.qa_panel.append_recognized(delta)
+            # Q&A 模式下不推進提詞位置（避免錯亂）
             return
         if self.transcript is None:
             return
@@ -783,24 +793,38 @@ class MainWindow(QMainWindow):
             self.showFullScreen()
 
     def _toggle_qa_mode(self) -> None:
-        """切換 Q&A 模式：中央切到 QAPanel，辨識文字路由到 Q&A 面板。"""
-        if self.central_stack.currentIndex() == 1:
+        """切換 Q&A 模式：右側顯示/隱藏 QA 面板。"""
+        if self.qa_panel.isVisible():
             self._exit_qa_mode()
         else:
             self._enter_qa_mode()
 
     def _enter_qa_mode(self) -> None:
-        self.central_stack.setCurrentIndex(1)
+        self.qa_panel.show()
         self.act_qa_mode.setChecked(True)
         self.act_qa_mode.setText("🎤 Q&A 模式 (ON)")
-        self.timer_ctrl.pause()
-        self.status_recognized.setText("Q&A 模式：辨識文字將路由到 Q&A 面板")
+        # 預設切換到「自動語言偵測」以辨識英文提問
+        self._switch_recognizer_language(self.qa_panel.get_language())
+        self.status_recognized.setText("Q&A 模式：觀眾提問會辨識並匹配預備答案")
 
     def _exit_qa_mode(self) -> None:
-        self.central_stack.setCurrentIndex(0)
+        self.qa_panel.hide()
         self.act_qa_mode.setChecked(False)
         self.act_qa_mode.setText("🎤 Q&A 模式")
+        # 切回預設語言
+        self._switch_recognizer_language(self.cfg.language)
         self.status_recognized.setText("已回到提詞模式")
+
+    def _switch_recognizer_language(self, language: str) -> None:
+        """重啟 recognizer 以套用新語言（language 只能在建構時設）。"""
+        if self.recognizer.is_running():
+            self.recognizer.stop()
+            self.recognizer.start(
+                model_size=self.cfg.model_size,
+                language=language,
+                compute_type=self.cfg.compute_type,
+                initial_prompt=(self.transcript.full_text[:200] if self.transcript else ""),
+            )
 
     def _ask_target_duration(self) -> None:
         seconds, ok = QInputDialog.getInt(
@@ -856,18 +880,8 @@ class MainWindow(QMainWindow):
         self.move(geo.x() + 50, geo.y() + 50)
         self.resize(min(self.width(), geo.width() - 100), min(self.height(), geo.height() - 100))
 
-    def _reposition_time_panel(self) -> None:
-        if not self.view:
-            return
-        margin = 12
-        self.time_panel.adjustSize()
-        x = self.view.width() - self.time_panel.width() - margin
-        self.time_panel.move(max(0, x), margin)
-        self.time_panel.raise_()
-
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
-        self._reposition_time_panel()
         # 遮罩跟著 view 同大小
         if hasattr(self, "loading_overlay") and self.loading_overlay.isVisible():
             self.loading_overlay.resize(self.view.size())
