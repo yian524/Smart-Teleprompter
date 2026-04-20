@@ -20,6 +20,8 @@ dependencies = [
     "deep-translator>=1.11.0",
     "argostranslate>=1.9.0",
     "opencc-python-reimplemented>=0.1.7",
+    "pymupdf>=1.24.0",
+    "imageio-ffmpeg>=0.4.9",
     # Windows 上 ctranslate2 4.x 需要這兩個 NVIDIA pip 套件提供 cuBLAS / cuDNN DLL
     "nvidia-cublas-cu12>=12.0; sys_platform == 'win32'",
     "nvidia-cudnn-cu12>=9.0; sys_platform == 'win32'",

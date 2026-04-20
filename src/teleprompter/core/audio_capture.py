@@ -64,6 +64,8 @@ class AudioCaptureWorker(QObject):
     window_ready = Signal(object)   # AudioWindow
     level_changed = Signal(float)
     error = Signal(str)
+    # 原始樣本 tap：給錄音功能訂閱（bytes 為 int16 little-endian 單聲道 16kHz）
+    raw_frame = Signal(bytes)
 
     def __init__(self, device: Optional[int | str] = None) -> None:
         super().__init__()
@@ -134,6 +136,11 @@ class AudioCaptureWorker(QObject):
         try:
             raw = bytes(indata)
             samples = np.frombuffer(raw, dtype=np.int16)
+            # Tap：原始音訊給錄音功能（不影響後續辨識流程）
+            try:
+                self.raw_frame.emit(raw)
+            except Exception:
+                pass
 
             # 音量回饋
             if len(samples) > 0:
@@ -209,6 +216,7 @@ class AudioCaptureController(QObject):
     window_ready = Signal(object)
     level_changed = Signal(float)
     error = Signal(str)
+    raw_frame = Signal(bytes)
 
     def __init__(self, parent: Optional[QObject] = None) -> None:
         super().__init__(parent)
@@ -228,6 +236,7 @@ class AudioCaptureController(QObject):
         self._worker.window_ready.connect(self.window_ready)
         self._worker.level_changed.connect(self.level_changed)
         self._worker.error.connect(self.error)
+        self._worker.raw_frame.connect(self.raw_frame)
         self._thread.start()
 
     def stop(self) -> None:

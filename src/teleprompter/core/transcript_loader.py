@@ -187,6 +187,10 @@ def split_sentences(text: str) -> list[Sentence]:
         if _PAGE_SEPARATOR_RE.match(line):
             pos += len(line) + 1
             continue
+        # 跳過整行註解 <!-- ... -->（當作寫給自己的備忘，不當講稿）
+        if stripped.startswith("<!--") and stripped.endswith("-->"):
+            pos += len(line) + 1
+            continue
         line_pos = 0
         for match in re.finditer(
             r"[^" + re.escape(_SENT_TERMINATORS) + r"]*?["
@@ -297,7 +301,7 @@ def _split_by_pages(text: str) -> list[str]:
 def _extract_page_title(page_text: str) -> str:
     """取頁面標題：優先取第一個 Markdown 標題 `# xxx`，否則第一行前 20 字。
 
-    跳過分頁符號本身（---、===、***）與空行。
+    跳過分頁符號本身（---、===、***）、空行、整行 `<!-- -->` 註解。
     """
     for line in page_text.splitlines():
         line = line.strip()
@@ -305,6 +309,9 @@ def _extract_page_title(page_text: str) -> str:
             continue
         # 跳過分頁符號
         if _PAGE_SEPARATOR_RE.match(line):
+            continue
+        # 跳過整行註解（備忘）
+        if line.startswith("<!--") and line.endswith("-->"):
             continue
         # Markdown 標題
         if line.startswith("#"):
@@ -315,9 +322,13 @@ def _extract_page_title(page_text: str) -> str:
 
 
 def parse_transcript(text: str) -> Transcript:
-    """統一解析：剝除註解 → 切分頁 → 切句 → 建立 Page 對映。"""
-    # 1. 剝除註解
-    text = strip_comments(text)
+    """統一解析：保留註解於 full_text → 切分頁 → 切句 → 建立 Page 對映。
+
+    註解 `<!-- ... -->` 不會被剝除（使用者編輯後仍看得見），但 `split_sentences`
+    會跳過整行註解；因此註解不會被辨識/對齊，僅作為視覺備忘。
+    內嵌於句中的註解（罕見）會被視為一般字元；建議註解獨立一行。
+    """
+    # 註：不再 strip_comments(text)，保留給 PrompterView 以灰斜體顯示
     # 2. 切分頁（保留原文以供 full_text）
     # 先把 page separator 轉為一行空白（保留位置不變），這樣句子索引仍與原文一致
     # 策略：找出每個 separator 的位置，用其為分界

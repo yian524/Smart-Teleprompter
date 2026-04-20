@@ -6,6 +6,8 @@ import logging
 import sys
 from pathlib import Path
 
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication
 
 # 相容兩種呼叫方式：
@@ -29,6 +31,25 @@ def _load_stylesheet() -> str:
     return ""
 
 
+def make_app_icon() -> QIcon:
+    """產生 app icon：綠底圓角 + 白色 T（Teleprompter）。"""
+    pix = QPixmap(128, 128)
+    pix.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pix)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    # 綠色漸層圓角底
+    painter.setBrush(QColor("#4CAF50"))
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.drawRoundedRect(0, 0, 128, 128, 20, 20)
+    # 白色 T
+    painter.setPen(QColor("white"))
+    f = QFont("Segoe UI", 72, QFont.Weight.Bold)
+    painter.setFont(f)
+    painter.drawText(pix.rect(), Qt.AlignmentFlag.AlignCenter, "T")
+    painter.end()
+    return QIcon(pix)
+
+
 def main() -> int:
     logging.basicConfig(
         level=logging.INFO,
@@ -37,12 +58,14 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("Smart Teleprompter")
     app.setOrganizationName("SmartTeleprompter")
+    app.setWindowIcon(make_app_icon())
     qss = _load_stylesheet()
     if qss:
         app.setStyleSheet(qss)
 
     cfg = load_config()
     win = MainWindow(cfg)
+    win.setWindowIcon(make_app_icon())
     win.show()
     return app.exec()
 
