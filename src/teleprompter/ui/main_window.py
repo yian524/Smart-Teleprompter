@@ -330,6 +330,9 @@ class MainWindow(QMainWindow):
         # 左側縮圖列（只在投影片模式顯示）— 重用 SlidePreviewPanel
         self.slide_preview = SlidePreviewPanel()
         self.slide_preview.hide()
+        # 寬度硬 cap：縮圖列不能吃掉主內容區（拖曳 splitter 也不行）
+        self.slide_preview.setMinimumWidth(160)
+        self.slide_preview.setMaximumWidth(420)
         self.content_splitter.addWidget(self.slide_preview)
 
         # 中間：QStackedWidget 裝兩種顯示方式
@@ -2219,12 +2222,21 @@ class MainWindow(QMainWindow):
                 )
 
     def _set_thumbnail_width(self, width: int) -> None:
-        """設定縮圖列在 content_splitter 的寬度。width=0 表示收合。"""
+        """設定縮圖列在 content_splitter 的寬度。
+        width=0 表示收合；否則 clamp 在 [180, min(400, total*0.4)] 以免吃掉主內容區。"""
         sizes = self.content_splitter.sizes()
         if len(sizes) < 2:
             return
         total = sum(sizes)
-        new_thumb = max(0, min(total - 200, width))
+        if width <= 0:
+            self.content_splitter.setSizes([0, total])
+            return
+        # 最小 180（太窄看不到縮圖標題）；最大取「total 的 40%」和 400 的較小者
+        max_thumb = max(180, min(400, int(total * 0.4)))
+        new_thumb = max(180, min(max_thumb, width))
+        # 主內容區至少保留 300px，否則縮圖全部讓位
+        if total - new_thumb < 300:
+            new_thumb = max(0, total - 300)
         self.content_splitter.setSizes([new_thumb, total - new_thumb])
 
     def _on_thumbnail_collapse(self, collapse: bool) -> None:
