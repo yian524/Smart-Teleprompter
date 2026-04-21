@@ -539,15 +539,14 @@ class MainWindow(QMainWindow):
         self.act_open.triggered.connect(self._open_file)
         tb.addAction(self.act_open)
 
+        # 儲存、貼上文字 → 只在選單列「檔案」中，不放工具列
         self.act_save = QAction("💾 儲存", self)
         self.act_save.setToolTip("把目前講稿寫回檔案 (Ctrl+S)")
         self.act_save.setShortcut("Ctrl+S")
         self.act_save.triggered.connect(self._save_current_transcript)
-        tb.addAction(self.act_save)
 
         self.act_paste = QAction("📋 貼上文字", self)
         self.act_paste.triggered.connect(self._paste_text)
-        tb.addAction(self.act_paste)
 
         self.act_open_slides = QAction("🖼 載入投影片", self)
         self.act_open_slides.setToolTip("載入 PDF 或 PPTX 作為右側視覺參考")
@@ -1234,6 +1233,26 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "儲存失敗", f"{e}")
 
     def _open_file(self) -> None:
+        """開啟講稿：先問來源 — 檔案 or 貼上文字。"""
+        box = QMessageBox(self)
+        box.setWindowTitle("開啟講稿")
+        box.setText(
+            "請選擇講稿來源：\n\n"
+            "• 從檔案載入：支援 .txt / .md / .markdown / .docx\n"
+            "• 貼上文字：直接貼純文字內容（會自動分句）"
+        )
+        btn_file = box.addButton("📂 從檔案", QMessageBox.ButtonRole.AcceptRole)
+        btn_paste = box.addButton("📋 貼上文字", QMessageBox.ButtonRole.AcceptRole)
+        btn_cancel = box.addButton("取消", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(btn_file)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is btn_file:
+            self._open_file_from_disk()
+        elif clicked is btn_paste:
+            self._paste_text()
+
+    def _open_file_from_disk(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self,
             "開啟講稿",
