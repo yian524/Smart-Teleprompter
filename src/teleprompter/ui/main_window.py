@@ -2231,12 +2231,17 @@ class MainWindow(QMainWindow):
         """收合 / 展開縮圖列。收合時顯示一個浮動 ▶ 按鈕可再展開。"""
         active = self.session_manager.active
         if collapse:
-            # 記住目前寬度，收合 → 隱藏整個面板
+            # 記住目前寬度；收合 → 隱藏 + 把 splitter 左欄壓到 0（否則空間仍被保留）
             if active is not None:
                 sizes = self.content_splitter.sizes()
                 if len(sizes) >= 2 and sizes[0] > 0:
                     active.thumbnail_panel_width = sizes[0]
             self.slide_preview.hide()
+            # 關鍵：把 splitter 左欄壓成 0，讓主內容區吃滿
+            sizes = self.content_splitter.sizes()
+            if len(sizes) >= 2:
+                total = sum(sizes)
+                self.content_splitter.setSizes([0, total])
             self._show_thumbnail_expand_btn()
         else:
             # 展開 → 還原寬度
