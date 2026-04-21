@@ -768,8 +768,7 @@ def test_split_handle_drag_changes_ratio(mw, sample_transcript, small_pdf, app):
     mw.load_slides(str(small_pdf))
     app.processEvents()
     original_ratio = mw.view._text_width_ratio
-    mw.view._on_split_handle_dragged(400)  # 拖到 x=400
+    mw.view.set_split_ratio(0.4)
     app.processEvents()
-    assert mw.view._text_width_ratio != original_ratio
-    # ratio 必須在合法範圍
+    assert abs(mw.view._text_width_ratio - 0.4) < 0.01
     assert 0.25 <= mw.view._text_width_ratio <= 0.85

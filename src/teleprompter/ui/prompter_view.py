@@ -32,68 +32,7 @@ from PySide6.QtGui import (
     QTextCursor,
     QWheelEvent,
 )
-from PySide6.QtWidgets import QTextEdit, QWidget
-
-
-class _SplitHandle(QWidget):
-    """文 / 圖 之間的拖拉條，浮在 QTextEdit viewport 上。"""
-
-    dragged_to_x = Signal(int)   # 新 X 座標（viewport 座標系）
-
-    def __init__(self, parent: QWidget) -> None:
-        super().__init__(parent)
-        self.setCursor(Qt.CursorShape.SplitHCursor)
-        self.setFixedWidth(8)
-        self.setStyleSheet(
-            "background-color: rgba(100, 100, 100, 0);"  # 預設透明
-        )
-        self._dragging = False
-        self._hover = False
-        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
-
-    def enterEvent(self, event) -> None:  # noqa: N802
-        self._hover = True
-        # 觸發 parent（PrompterView 的 viewport）重繪把線畫在最上層
-        if self.parent() is not None:
-            self.parent().update()
-
-    def leaveEvent(self, event) -> None:  # noqa: N802
-        self._hover = False
-        if self.parent() is not None:
-            self.parent().update()
-
-    def paintEvent(self, event) -> None:  # noqa: N802
-        # 實際線條由 PrompterView.paintEvent 最後一步畫（確保不被 slide 圖蓋掉），
-        # 本 widget 只吃滑鼠事件，自身不畫。
-        pass
-
-    def current_color(self):
-        from PySide6.QtGui import QColor
-        if self._dragging:
-            return QColor("#4CAF50")
-        if self._hover:
-            return QColor("#80D8FF")
-        return QColor(128, 200, 255, 140)
-
-    def mousePressEvent(self, event) -> None:  # noqa: N802
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._dragging = True
-            event.accept()
-            if self.parent() is not None:
-                self.parent().update()
-
-    def mouseMoveEvent(self, event) -> None:  # noqa: N802
-        if self._dragging and self.parent() is not None:
-            global_pt = event.globalPosition().toPoint()
-            local = self.parent().mapFromGlobal(global_pt)
-            self.dragged_to_x.emit(local.x())
-            event.accept()
-
-    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
-        self._dragging = False
-        if self.parent() is not None:
-            self.parent().update()
-        event.accept()
+from PySide6.QtWidgets import QTextEdit
 
 
 class PrompterView(QTextEdit):
@@ -139,10 +78,12 @@ class PrompterView(QTextEdit):
         self._page_boundaries: list[tuple[int, int]] = []
         # 文字寬度占比（使用者可拖拉調整）
         self._text_width_ratio = self._DEFAULT_TEXT_WIDTH_RATIO
-        # 文 / 圖拖拉分隔條
-        self._split_handle = _SplitHandle(self.viewport())
-        self._split_handle.dragged_to_x.connect(self._on_split_handle_dragged)
-        self._split_handle.hide()  # 只在有 slide 時才顯示
+        # 文 / 圖拖拉分隔條：狀態 + 滑鼠追蹤
+        self._split_hover = False
+        self._split_dragging = False
+        self._split_line_x = 0   # 目前分隔線 x（viewport 座標）
+        self.viewport().setMouseTracking(True)
+        self.viewport().installEventFilter(self)
 
         # 顏色（由 set_colors 控制）
         self._color_spoken = QColor("#6B6B6B")
@@ -924,11 +865,13 @@ class PrompterView(QTextEdit):
                         painter.setPen(QColor("#80D8FF"))
                         painter.drawText(tx, ty, label)
 
-            # 3) 文圖分隔條（貫穿整個 viewport，畫在最上層不被 slide 圖蓋）
-            if self._slide_deck is not None and self._split_handle.isVisible():
-                x = int(vw * self._text_width_ratio)
-                color = self._split_handle.current_color()
-                painter.fillRect(x - 1, 0, 2, vh, color)
+            # 3) 文圖分隔條（貫穿整個 viewport，畫在最上層）
+            if self._slide_deck is not None:
+                x = self._split_line_x
+                color = self._current_split_color()
+                # 拖拉中加粗，方便辨識
+                width = 4 if (self._split_dragging or self._split_hover) else 2
+                painter.fillRect(x - width // 2, 0, width, vh, color)
         finally:
             painter.end()
 
@@ -989,36 +932,94 @@ class PrompterView(QTextEdit):
         """把文字 wrap 寬度設為 viewport 的 58%（若有 slide）或全寬（無 slide）。"""
         if self._slide_deck is None:
             self.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
-            self._split_handle.hide()
             return
         self.setLineWrapMode(QTextEdit.LineWrapMode.FixedPixelWidth)
         w = max(200, int(self.viewport().width() * self._text_width_ratio))
         self.setLineWrapColumnOrWidth(w)
-        self._split_handle.show()
-        self._reposition_split_handle()
+        self._split_line_x = int(self.viewport().width() * self._text_width_ratio)
 
-    def _reposition_split_handle(self) -> None:
-        """把拖拉條定位到目前分割位置。"""
-        vw = self.viewport().width()
-        vh = self.viewport().height()
-        if self._slide_deck is None or vw <= 0:
-            return
-        x = int(vw * self._text_width_ratio)
-        self._split_handle.setGeometry(x - 4, 0, 8, vh)
-        self._split_handle.raise_()
+    def _split_line_hit_range(self) -> tuple[int, int]:
+        """返回分隔線可點擊的 x 範圍（左右各 6px 容錯）。"""
+        x = self._split_line_x
+        return (x - 6, x + 6)
 
-    def _on_split_handle_dragged(self, new_x: int) -> None:
-        """使用者拖拉分隔條 → 更新比例並重繪。"""
-        vw = self.viewport().width()
-        if vw <= 0:
+    def _is_over_split_line(self, x: int) -> bool:
+        if self._slide_deck is None:
+            return False
+        lo, hi = self._split_line_hit_range()
+        return lo <= x <= hi
+
+    def set_split_ratio(self, ratio: float) -> None:
+        """設定文/圖分隔比例（0.28~0.82）。供測試或設定 dialog 直接呼叫。"""
+        if self._slide_deck is None:
             return
-        ratio = max(0.28, min(0.82, new_x / vw))
+        ratio = max(0.28, min(0.82, ratio))
         if abs(ratio - self._text_width_ratio) < 0.005:
             return
         self._text_width_ratio = ratio
         self._apply_text_wrap_width()
         self._relayout_slide_gaps()
         self.viewport().update()
+
+    def _current_split_color(self):
+        if self._split_dragging:
+            return QColor("#4CAF50")
+        if self._split_hover:
+            return QColor("#80D8FF")
+        return QColor(128, 200, 255, 140)
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        """攔截 viewport 滑鼠事件以處理分隔線拖曳（在 QTextEdit 文字選取邏輯之前）。"""
+        from PySide6.QtCore import QEvent
+        if obj is not self.viewport() or self._slide_deck is None:
+            return super().eventFilter(obj, event)
+
+        et = event.type()
+        if et == QEvent.Type.MouseMove:
+            x = int(event.position().x()) if hasattr(event, "position") else event.pos().x()
+            if self._split_dragging:
+                vw = self.viewport().width()
+                if vw > 0:
+                    ratio = max(0.28, min(0.82, x / vw))
+                    if abs(ratio - self._text_width_ratio) > 0.005:
+                        self._text_width_ratio = ratio
+                        self._apply_text_wrap_width()
+                        self._relayout_slide_gaps()
+                        self.viewport().update()
+                return True
+            # hover 狀態
+            new_hover = self._is_over_split_line(x)
+            if new_hover != self._split_hover:
+                self._split_hover = new_hover
+                # cursor 顯示為 SplitHCursor
+                if new_hover:
+                    self.viewport().setCursor(Qt.CursorShape.SplitHCursor)
+                else:
+                    self.viewport().unsetCursor()
+                self.viewport().update()
+            # hover 不應吃事件，讓 QTextEdit 正常處理
+            return False
+
+        if et == QEvent.Type.MouseButtonPress:
+            x = int(event.position().x()) if hasattr(event, "position") else event.pos().x()
+            if event.button() == Qt.MouseButton.LeftButton and self._is_over_split_line(x):
+                self._split_dragging = True
+                self.viewport().update()
+                return True
+
+        if et == QEvent.Type.MouseButtonRelease:
+            if self._split_dragging:
+                self._split_dragging = False
+                self.viewport().update()
+                return True
+
+        if et == QEvent.Type.Leave:
+            if self._split_hover:
+                self._split_hover = False
+                self.viewport().unsetCursor()
+                self.viewport().update()
+
+        return super().eventFilter(obj, event)
 
     def _slide_area_rect_for_page(self, page_no: int) -> tuple[int, int, int, int] | None:
         """回傳 slide 的 (x, y_document, width, height)；y_document 是 document 內座標（未扣 scroll）。
@@ -1247,11 +1248,9 @@ class PrompterView(QTextEdit):
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
-        # 投影片寬度依 viewport 改變 → 重排文字寬度與 margin
         if self._slide_deck is not None:
             self._apply_text_wrap_width()
             self._relayout_slide_gaps()
-            self._reposition_split_handle()
 
     def wheelEvent(self, event: QWheelEvent) -> None:
         # 只在 Ctrl 明確按下時才縮放字體；其他狀況走預設捲動
