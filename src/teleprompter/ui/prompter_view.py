@@ -1792,8 +1792,12 @@ class PrompterView(QTextEdit):
             self.slide_double_clicked.emit(page_no)
             event.accept()
             return
-        # 編輯模式：沿用 Qt 預設（雙擊選整個單字）
-        # 非編輯模式：雙擊不再觸發對話框（改為單擊觸發 → 見 mouseReleaseEvent）
+        # 雙擊 = 單擊的替代入口：也發 position_clicked，讓 MainWindow 彈編輯對話框
+        # （編輯模式下使用者可能已經在打字；Qt 預設的「雙擊選單字」仍執行，但額外 emit signal
+        #   不影響游標定位，只是讓 MainWindow 可以做客製行為）
+        if self._tool == self.TOOL_POINTER and event.button() == Qt.MouseButton.LeftButton:
+            cursor = self.cursorForPosition(pos)
+            self.position_clicked.emit(cursor.position())
         super().mouseDoubleClickEvent(event)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
