@@ -448,6 +448,8 @@ class MainWindow(QMainWindow):
 
         # ---- 工具列 ----
         self._build_toolbar()
+        # ---- 選單列（檔案 / 編輯 / 檢視 / 工具）— 放所有 actions，和工具列共用 QAction ----
+        self._build_menu_bar()
         self._build_shortcuts()
 
         # ---- Signal/Slot ----
@@ -856,6 +858,81 @@ class MainWindow(QMainWindow):
         # 編輯模式切換時重設結果（MD 重新 parse）
         self.view.text_edited.connect(self._on_transcript_edited)
         self.view.edit_mode_changed.connect(self._on_edit_mode_changed)
+
+    def _build_menu_bar(self) -> None:
+        """選單列（Menu Bar）：把不常用的 actions 放進下拉選單，與工具列共用 QAction。"""
+        mb = self.menuBar()
+
+        # 檔案
+        m_file = mb.addMenu("檔案(&F)")
+        m_file.addAction(self.act_open)
+        m_file.addAction(self.act_open_slides)
+        m_file.addAction(self.act_paste)
+        m_file.addSeparator()
+        m_file.addAction(self.act_save)
+        m_file.addSeparator()
+        m_file.addAction(self.act_settings)
+        m_file.addSeparator()
+        act_quit = QAction("離開(&Q)", self)
+        act_quit.setShortcut(QKeySequence.StandardKey.Quit)
+        act_quit.triggered.connect(self.close)
+        m_file.addAction(act_quit)
+
+        # 編輯
+        m_edit = mb.addMenu("編輯(&E)")
+        m_edit.addAction(self.act_edit_mode)
+        m_edit.addSeparator()
+        m_edit.addAction(self.act_bold)
+        m_edit.addAction(self.act_italic)
+        m_edit.addAction(self.act_underline)
+        m_edit.addAction(self.act_highlight)
+        m_edit.addSeparator()
+        m_edit.addAction(self.act_clear_fmt)
+        m_edit.addAction(self.act_clear_all_fmt)
+        m_edit.addSeparator()
+        m_edit.addAction(self.act_insert_annotation)
+        m_edit.addAction(self.act_compact_ws)
+
+        # 檢視
+        m_view = mb.addMenu("檢視(&V)")
+        act_mode_transcript = QAction("講稿模式(&1)", self)
+        act_mode_transcript.setShortcut(QKeySequence("Ctrl+1"))
+        act_mode_transcript.triggered.connect(lambda: self._set_view_mode("transcript"))
+        act_mode_split = QAction("分割模式(&2)", self)
+        act_mode_split.setShortcut(QKeySequence("Ctrl+2"))
+        act_mode_split.triggered.connect(lambda: self._set_view_mode("split"))
+        act_mode_slide = QAction("投影片模式(&3)", self)
+        act_mode_slide.setShortcut(QKeySequence("Ctrl+3"))
+        act_mode_slide.triggered.connect(lambda: self._set_view_mode("slide"))
+        m_view.addAction(act_mode_transcript)
+        m_view.addAction(act_mode_split)
+        m_view.addAction(act_mode_slide)
+        m_view.addSeparator()
+        m_view.addAction(self.act_fullscreen)
+        m_view.addSeparator()
+        m_view.addAction(self.act_font_bigger)
+        m_view.addAction(self.act_font_smaller)
+
+        # 工具
+        m_tools = mb.addMenu("工具(&T)")
+        m_tools.addAction(self.act_start)
+        m_tools.addAction(self.act_goto_speech)
+        m_tools.addAction(self.act_reset_pos)
+        m_tools.addSeparator()
+        m_tools.addAction(self.act_qa_mode)
+        m_tools.addAction(self.act_record)
+        m_tools.addSeparator()
+        m_tools.addAction(self.act_reset_timer)
+        m_tools.addAction(self.act_clear_skipped)
+
+        # 標註
+        m_annot = mb.addMenu("標註(&A)")
+        m_annot.addAction(self.act_tool_pointer)
+        m_annot.addAction(self.act_tool_pencil)
+        m_annot.addAction(self.act_tool_note)
+        m_annot.addAction(self.act_tool_eraser)
+        m_annot.addSeparator()
+        m_annot.addAction(self.act_clear_page)
 
     def _build_shortcuts(self) -> None:
         QShortcut(Qt.Key.Key_Up, self, activated=lambda: self._jump_relative(-1))
