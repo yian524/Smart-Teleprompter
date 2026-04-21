@@ -186,6 +186,20 @@ class SettingsDialog(QDialog):
         self.max_fwd_spin.setValue(getattr(config, "max_forward_sentences", 10))
         sf.addRow("最大往前跳段範圍", self.max_fwd_spin)
 
+        self.qa_loopback_check = QCheckBox(
+            "Q&A 模式改抓系統聲音（Teams/Zoom 遠距觀眾；僅 Windows）"
+        )
+        self.qa_loopback_check.setChecked(
+            getattr(config, "qa_use_system_audio", True)
+        )
+        self.qa_loopback_check.setToolTip(
+            "進入 Q&A 模式時，自動切到 WASAPI loopback 抓電腦輸出聲音，\n"
+            "這樣可以辨識遠距會議軟體中觀眾的提問；\n"
+            "退出 Q&A 會自動切回麥克風。\n"
+            "非 Windows 系統不支援此選項，會回退到麥克風。"
+        )
+        sf.addRow("", self.qa_loopback_check)
+
         tabs.addTab(speech_tab, "語音")
 
         # ---- 計時分頁 ----
@@ -244,6 +258,7 @@ class SettingsDialog(QDialog):
             enable_soft_advance=self.soft_advance_check.isChecked(),
             stability_mode=self.stability_combo.currentData() or "balanced",
             max_forward_sentences=self.max_fwd_spin.value(),
+            qa_use_system_audio=self.qa_loopback_check.isChecked(),
             target_duration_sec=self.target_spin.value(),
             milestone_marks_sec=milestones,
         )

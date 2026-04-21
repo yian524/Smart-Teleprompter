@@ -46,6 +46,9 @@ class AppConfig:
     max_forward_sentences: int = 10
     # 最大允許往前跳的字元數（細粒度控制，0 = 不限制）
     max_forward_chars: int = 0
+    # QA 模式使用系統聲音 loopback（Windows WASAPI）：抓 Teams/Zoom 觀眾聲音
+    # True = 進 QA 時自動切 loopback；退出 QA 切回麥克風
+    qa_use_system_audio: bool = True
 
 
 _MIGRATION_KEY = "_migration_streaming_v1"

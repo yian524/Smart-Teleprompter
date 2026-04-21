@@ -67,9 +67,14 @@ class AudioCaptureWorker(QObject):
     # 原始樣本 tap：給錄音功能訂閱（bytes 為 int16 little-endian 單聲道 16kHz）
     raw_frame = Signal(bytes)
 
-    def __init__(self, device: Optional[int | str] = None) -> None:
+    def __init__(
+        self, device: Optional[int | str] = None, *, loopback: bool = False
+    ) -> None:
         super().__init__()
         self.device = device if device not in ("", None) else None
+        # loopback=True: Windows 用 WASAPI 擷取「系統輸出」（Teams/Zoom 等觀眾聲音）
+        # 非 Windows 或無 WASAPI → fallback 回預設麥克風
+        self.loopback = bool(loopback)
         self._stop = False
         self._stream = None
         self._vad = None
@@ -107,17 +112,39 @@ class AudioCaptureWorker(QObject):
             return
 
         try:
+            extra = None
+            device_to_use = self.device
+            source_label = "麥克風"
+            if self.loopback:
+                # 嘗試 WASAPI loopback：抓系統輸出裝置（對應「喇叭端」聲音）
+                # 要求：Windows + sounddevice 新版（支援 WasapiSettings.loopback=True）
+                try:
+                    wasapi_idx = next(
+                        i for i, h in enumerate(sd.query_hostapis())
+                        if "WASAPI" in h.get("name", "")
+                    )
+                    out_dev = sd.query_hostapis(wasapi_idx).get("default_output_device", -1)
+                    if out_dev >= 0:
+                        device_to_use = out_dev
+                        extra = sd.WasapiSettings(loopback=True)
+                        source_label = "系統輸出 (loopback)"
+                    else:
+                        logger.warning("找不到 WASAPI default output → 退回麥克風")
+                except Exception as e:
+                    logger.warning("WASAPI loopback 初始化失敗，退回麥克風: %s", e)
             self._stream = sd.RawInputStream(
                 samplerate=SAMPLE_RATE,
                 blocksize=FRAME_SAMPLES,
-                device=self.device,
+                device=device_to_use,
                 channels=1,
                 dtype="int16",
                 callback=self._on_audio,
+                extra_settings=extra,
             )
             self._stream.start()
+            logger.info("音訊輸入：%s (device=%s)", source_label, device_to_use)
         except Exception as e:
-            self.error.emit(f"無法開啟麥克風: {e}")
+            self.error.emit(f"無法開啟音訊輸入: {e}")
             return
 
         self._last_emit_t = time.monotonic()
@@ -228,11 +255,13 @@ class AudioCaptureController(QObject):
     def is_running(self) -> bool:
         return self._thread is not None and self._thread.isRunning()
 
-    def start(self, device: Optional[int | str] = None) -> None:
+    def start(
+        self, device: Optional[int | str] = None, *, loopback: bool = False
+    ) -> None:
         if self.is_running():
             return
         self._thread = QThread()
-        self._worker = AudioCaptureWorker(device=device)
+        self._worker = AudioCaptureWorker(device=device, loopback=loopback)
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
         self._worker.window_ready.connect(self.window_ready)

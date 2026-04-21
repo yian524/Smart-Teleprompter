@@ -1666,7 +1666,11 @@ class MainWindow(QMainWindow):
                 device_arg = int(device)
             except ValueError:
                 device_arg = device
-        self.audio.start(device=device_arg)
+        # QA 模式 + 啟用 system audio loopback → 抓 Teams/Zoom 的觀眾聲音
+        use_loopback = bool(
+            self.qa_panel.isVisible() and getattr(self.cfg, "qa_use_system_audio", True)
+        )
+        self.audio.start(device=device_arg, loopback=use_loopback)
         self.timer_ctrl.start()
         self.act_start.setText("⏸ 暫停")
         self.status_recognized.setText("辨識中…")
@@ -2347,13 +2351,38 @@ class MainWindow(QMainWindow):
             self.qa_panel.translate_check.setChecked(True)
         # 預設切換到「自動語言偵測」以辨識英文提問
         self._switch_recognizer_language(self.qa_panel.get_language())
+        # 切換音訊輸入來源：QA → 系統 loopback（如設定允許）
+        if getattr(self.cfg, "qa_use_system_audio", True):
+            self._restart_audio_for_current_mode()
         # 模型載入進度：用與 ▶ 開始 相同的 loading overlay，直到 _on_model_loaded 淡出
         if hasattr(self, "loading_overlay"):
             self.loading_overlay.set_status(
                 "Q&A 模式準備中", "正在切換辨識模型…",
             )
             self.loading_overlay.show_over(self.view)
-        self.status_recognized.setText("Q&A 模式：觀眾提問會辨識並匹配預備答案")
+        self.status_recognized.setText(
+            "Q&A 模式：觀眾提問會辨識並匹配預備答案（含遠距 Teams/Zoom 輸出聲音）"
+        )
+
+    def _restart_audio_for_current_mode(self) -> None:
+        """根據目前是否在 QA 模式 + cfg.qa_use_system_audio 重啟音訊擷取。
+        報告中才有意義（audio 本來就 running）；若沒 running 就跳過，待 ▶ 開始 時用正確來源。"""
+        if not self.audio.is_running():
+            return
+        self.audio.stop()
+        device = self.cfg.mic_device
+        device_arg: int | str | None
+        if device == "":
+            device_arg = None
+        else:
+            try:
+                device_arg = int(device)
+            except ValueError:
+                device_arg = device
+        use_loopback = bool(
+            self.qa_panel.isVisible() and getattr(self.cfg, "qa_use_system_audio", True)
+        )
+        self.audio.start(device=device_arg, loopback=use_loopback)
 
     def _exit_qa_mode(self) -> None:
         self.qa_panel.hide()
@@ -2361,6 +2390,9 @@ class MainWindow(QMainWindow):
         self.act_qa_mode.setText("🎤 Q&A 模式")
         # 切回預設語言
         self._switch_recognizer_language(self.cfg.language)
+        # 切回麥克風輸入（離開 QA → 報告繼續）
+        if getattr(self.cfg, "qa_use_system_audio", True):
+            self._restart_audio_for_current_mode()
         self.status_recognized.setText("已回到提詞模式")
 
     def _switch_recognizer_language(self, language: str) -> None:

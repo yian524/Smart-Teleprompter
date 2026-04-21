@@ -309,6 +309,33 @@ def test_pr9_session_roundtrip_restores_position(mw, tmp_path):
 # ---- PR10：Start/Pause 在報告中交替，engine 不錯亂 ----
 
 
+def test_pr11_audio_controller_accepts_loopback_kwarg(mw):
+    """AudioCaptureController.start() 支援 loopback=True（不炸；實際能否 loopback 依平台）。"""
+    # 不實際啟動音訊流（測試環境不一定有裝置），只確認 API 介面接 loopback 參數
+    import inspect
+    sig = inspect.signature(mw.audio.start)
+    assert "loopback" in sig.parameters
+    # AudioCaptureWorker 同樣接 loopback
+    from teleprompter.core.audio_capture import AudioCaptureWorker
+    worker = AudioCaptureWorker(device=None, loopback=True)
+    assert worker.loopback is True
+    worker2 = AudioCaptureWorker(device=None)
+    assert worker2.loopback is False
+
+
+def test_pr12_qa_mode_auto_checks_translation_and_loopback_config(mw, tmp_path):
+    """進 QA 模式 → 自動勾選翻譯中文；cfg.qa_use_system_audio 預設 True。"""
+    from teleprompter.config import AppConfig
+    default = AppConfig()
+    assert default.qa_use_system_audio is True
+    # 開啟 QA
+    mw._enter_qa_mode()
+    assert mw.qa_panel.isVisible()
+    assert mw.qa_panel.translate_check.isChecked()
+    mw._exit_qa_mode()
+    assert not mw.qa_panel.isVisible()
+
+
 def test_pr10_start_pause_alternating_preserves_state(mw, tmp_path):
     txt = _make_transcript(tmp_path, n_pages=2, sents_per_page=3)
     mw.load_file(str(txt))
