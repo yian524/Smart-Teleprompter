@@ -269,6 +269,52 @@ def test_portrait_split_falls_back_to_prompterview_without_deck(main_window, tmp
     assert main_window._content_stack.currentIndex() == 0
 
 
+# --- Auto-scaffold when loading slides into empty transcript ---
+
+
+def test_load_slides_generates_default_transcript_when_empty(main_window, tmp_path):
+    """空講稿 + 載入 N 頁 PDF → 自動產生 N 頁 scaffold。"""
+    import fitz
+    # 動態產生 3 頁 PDF
+    doc = fitz.open()
+    for i in range(3):
+        page = doc.new_page(width=595, height=842)
+        page.insert_text((50, 72), f"Slide {i + 1}", fontsize=24)
+    pdf_path = tmp_path / "slides.pdf"
+    doc.save(str(pdf_path))
+    doc.close()
+
+    # 確保一開始無講稿
+    main_window.transcript = None
+    main_window.load_slides(str(pdf_path))
+
+    assert main_window.transcript is not None
+    assert len(main_window.transcript.pages) == 3
+    # 每頁都含 placeholder
+    assert main_window.transcript.full_text.count("請在此輸入") == 3
+    # 每頁標題
+    assert "# Slide 1" in main_window.transcript.full_text
+    assert "# Slide 3" in main_window.transcript.full_text
+
+
+def test_load_slides_preserves_existing_transcript(main_window, tmp_path):
+    """已有講稿 + 載入投影片 → 不覆蓋既有 scaffold。"""
+    _load_multi_page(main_window, tmp_path)
+    original_text = main_window.view.toPlainText()
+
+    import fitz
+    doc = fitz.open()
+    for _ in range(5):
+        page = doc.new_page(width=595, height=842)
+    pdf_path = tmp_path / "slides.pdf"
+    doc.save(str(pdf_path))
+    doc.close()
+
+    main_window.load_slides(str(pdf_path))
+    # 講稿應維持原本 3 頁內容（不被覆蓋）
+    assert main_window.view.toPlainText() == original_text
+
+
 # --- SlideModeView key handling ---
 
 

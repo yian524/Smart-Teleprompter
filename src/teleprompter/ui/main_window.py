@@ -1318,6 +1318,9 @@ class MainWindow(QMainWindow):
         session.slides_path = str(p)
         self.slide_deck = deck
         session.slide_deck = deck
+        # 若目前尚無講稿 → 依投影片頁數產生預設 scaffold（每頁一個「# Slide N」+ placeholder）
+        if self.transcript is None or not self.transcript.full_text.strip():
+            self._create_default_transcript_from_slides(deck.page_count)
         # 嵌入到 PrompterView（左文右圖）
         self.view.set_slide_deck(deck)
         self._sync_slide_to_current_sentence()
@@ -2535,6 +2538,20 @@ class MainWindow(QMainWindow):
             if pre_mode is not None and pre_mode != self._view_mode:
                 self._set_view_mode(pre_mode)
             self._pre_edit_view_mode = None
+
+    def _create_default_transcript_from_slides(self, n_pages: int) -> None:
+        """投影片已載入但講稿為空 → 產生 n_pages 頁的 scaffold 讓使用者直接編輯。
+
+        每頁一個 `# Slide N` 標題 + placeholder，頁間用 `---` 分隔。
+        """
+        if n_pages <= 0:
+            return
+        from ..core.transcript_loader import load_from_string
+        placeholder = "（請在此輸入此頁講稿）"
+        parts = [f"# Slide {i}\n\n{placeholder}\n" for i in range(1, n_pages + 1)]
+        text = "\n---\n\n".join(parts)
+        transcript = load_from_string(text)
+        self._apply_transcript(transcript, source_path="")
 
     def _expand_transcript_for_slides(self) -> int:
         """若 slide_deck 的頁數 > 講稿頁數，為每張多餘的 slide 追加一個空白 `---` + `# Slide N` 區塊。
