@@ -22,10 +22,14 @@ except ImportError:
 
 
 def _load_stylesheet() -> str:
-    qss = Path(__file__).parent / "resources" / "styles.qss"
+    res_dir = Path(__file__).parent / "resources"
+    qss = res_dir / "styles.qss"
     if qss.exists():
         try:
-            return qss.read_text(encoding="utf-8")
+            text = qss.read_text(encoding="utf-8")
+            # 替換 __ICONS__ 佔位符為 icons 資料夾絕對路徑（Qt stylesheet 的 url 需要有效路徑）
+            icons_dir = (res_dir / "icons").as_posix()
+            return text.replace("__ICONS__", icons_dir)
         except OSError:
             return ""
     return ""
