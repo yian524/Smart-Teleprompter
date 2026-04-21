@@ -88,6 +88,8 @@ class PrompterView(QTextEdit):
         self._drag_offset: QPoint = QPoint(0, 0)
         # 縮放中的便利貼（右下角 handle 拖拉）
         self._resizing_note: Annotation | None = None
+        # 單擊偵測用：記錄按下位置，釋放時看移動距離判定是否為「非拖曳點擊」
+        self._press_pos_for_click: QPoint | None = None
 
         # 編輯時 MD 渲染 debounce（避免每次 keystroke 都整篇重掃）
         self._md_refresh_timer = QTimer(self)
@@ -1438,6 +1440,9 @@ class PrompterView(QTextEdit):
             return
         pos = event.position() if hasattr(event, "position") else event.pos()
         point = QPoint(int(pos.x()), int(pos.y()))
+        # 記錄按下位置（供 release 判定是 click 還是 drag）
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._press_pos_for_click = point
         # 指標工具：先檢查右下角 resize handle → 拖拉→ QTextEdit 預設
         if self._tool == self.TOOL_POINTER:
             if event.button() == Qt.MouseButton.LeftButton:
@@ -1568,6 +1573,21 @@ class PrompterView(QTextEdit):
             event.accept()
             return
         if self._tool == self.TOOL_POINTER:
+            # 非拖曳單擊 → 發 position_clicked（MainWindow 彈編輯對話框）
+            pos = event.position() if hasattr(event, "position") else event.pos()
+            rel_point = QPoint(int(pos.x()), int(pos.y()))
+            press = self._press_pos_for_click
+            self._press_pos_for_click = None
+            if (
+                event.button() == Qt.MouseButton.LeftButton
+                and press is not None
+                and (press - rel_point).manhattanLength() < 5
+            ):
+                cursor = self.cursorForPosition(rel_point)
+                # 先讓 QTextEdit 處理 release（清選取等）
+                super().mouseReleaseEvent(event)
+                self.position_clicked.emit(cursor.position())
+                return
             super().mouseReleaseEvent(event)
             return
         if self._tool == self.TOOL_PENCIL and self._drawing_stroke:
@@ -1770,13 +1790,8 @@ class PrompterView(QTextEdit):
             self.slide_double_clicked.emit(page_no)
             event.accept()
             return
-        # 編輯模式：沿用 Qt 預設（雙擊選整個單字，不跳位置）
-        if self._edit_mode:
-            super().mouseDoubleClickEvent(event)
-            return
-        # 非編輯模式：雙擊才「跳到該位置」
-        cursor = self.cursorForPosition(pos)
-        self.position_clicked.emit(cursor.position())
+        # 編輯模式：沿用 Qt 預設（雙擊選整個單字）
+        # 非編輯模式：雙擊不再觸發對話框（改為單擊觸發 → 見 mouseReleaseEvent）
         super().mouseDoubleClickEvent(event)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:

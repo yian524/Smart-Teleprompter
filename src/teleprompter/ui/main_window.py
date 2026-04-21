@@ -843,6 +843,16 @@ class MainWindow(QMainWindow):
         self.edit_toolbar.setMovable(False)
         self.edit_toolbar.hide()
 
+        # 預設隱藏：只有 ✏ 編輯模式 開啟後才顯示 B/I/U/格式/插入註解/清理空白
+        # （enabled 永遠為 True —— 快捷鍵 / visible 才是 gate）
+        for act in (
+            self.act_bold, self.act_italic, self.act_underline,
+            self.act_clear_fmt, self.act_clear_all_fmt,
+            self.act_insert_annotation, self.act_compact_ws,
+        ):
+            act.setVisible(False)
+            act.setEnabled(True)   # 明確標記為 enabled，讓 isEnabled() 一致回 True
+
         # 編輯模式切換時重設結果（MD 重新 parse）
         self.view.text_edited.connect(self._on_transcript_edited)
         self.view.edit_mode_changed.connect(self._on_edit_mode_changed)
@@ -2446,8 +2456,14 @@ class MainWindow(QMainWindow):
         self.status_recognized.setText("🧹 已清理多餘空白")
 
     def _on_edit_mode_changed(self, enabled: bool) -> None:
-        # edit_toolbar 永遠可見；所有 action 永遠 enabled
-        # 編輯模式只控制「直接鍵入」（QTextEdit.setReadOnly）
+        # 編輯模式 OFF → 隱藏 B/I/U/格式/清格式/插入註解/清理空白
+        # 編輯模式 ON → 顯示上列按鈕
+        for act in (
+            self.act_bold, self.act_italic, self.act_underline,
+            self.act_clear_fmt, self.act_clear_all_fmt,
+            self.act_insert_annotation, self.act_compact_ws,
+        ):
+            act.setVisible(enabled)
         if enabled:
             self.act_edit_mode.setText("✏ 編輯模式 (ON)")
         else:

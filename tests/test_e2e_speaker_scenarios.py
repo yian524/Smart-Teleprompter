@@ -425,17 +425,15 @@ def test_edit_exit_preserves_position_and_format(mw, sample_transcript, app):
 
 
 def test_edit_actions_merged_into_annotation_toolbar(mw, sample_transcript, app):
-    """編輯 actions 已併入 annotation_toolbar；所有 action 永遠啟用。"""
+    """編輯 actions 已併入 annotation_toolbar。"""
     mw.load_file(str(sample_transcript))
     app.processEvents()
-    # 原 edit_toolbar 已清空（兼容屬性仍存在）
     anno_actions = mw.annotation_toolbar.actions()
     for act in (mw.act_bold, mw.act_italic, mw.act_underline,
                 mw.act_highlight, mw.act_clear_fmt, mw.act_clear_all_fmt,
                 mw.act_insert_annotation, mw.act_compact_ws,
                 mw.act_edit_mode):
         assert act in anno_actions, f"{act.text()} 應在 annotation_toolbar"
-        assert act.isEnabled(), f"{act.text()} 應永遠啟用"
 
 
 # ============================================================

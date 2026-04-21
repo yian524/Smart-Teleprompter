@@ -1,4 +1,4 @@
-"""Click-to-edit: 使用者雙擊講稿位置 → 對話框問是否編輯。"""
+"""Click-to-edit: 使用者單擊講稿位置 → 對話框問是否編輯。"""
 
 import os
 
@@ -79,3 +79,68 @@ def test_click_no_jumps_without_editing(main_window, tmp_path, monkeypatch):
     assert not main_window.view.is_edit_mode()
     # 念稿位置已更新
     assert main_window.engine.current_sentence_index != before_sent
+
+
+def test_single_click_emits_position_clicked_not_double(main_window, tmp_path, app, monkeypatch):
+    """單擊（非拖曳）觸發 position_clicked signal；非雙擊。"""
+    from PySide6.QtCore import QEvent, QPointF
+    from PySide6.QtGui import QMouseEvent
+    from PySide6.QtCore import Qt
+
+    sample = tmp_path / "s.txt"
+    sample.write_text("Hello world\n測試內容。\n", encoding="utf-8")
+    main_window.load_file(str(sample))
+    loop = QEventLoop(); QTimer.singleShot(150, loop.quit); loop.exec()
+
+    # 吃掉 MainWindow._on_view_clicked 會觸發的 QMessageBox（避免 modal 卡住）
+    monkeypatch.setattr(
+        QMessageBox, "question",
+        staticmethod(lambda *a, **kw: QMessageBox.StandardButton.No),
+    )
+    received = []
+    main_window.view.position_clicked.connect(lambda p: received.append(p))
+
+    # 模擬單擊（press + release at same point）
+    press = QMouseEvent(
+        QEvent.Type.MouseButtonPress, QPointF(100, 50),
+        Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    release = QMouseEvent(
+        QEvent.Type.MouseButtonRelease, QPointF(100, 50),
+        Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    main_window.view.mousePressEvent(press)
+    main_window.view.mouseReleaseEvent(release)
+    assert len(received) == 1, "單擊應觸發一次 position_clicked"
+
+
+def test_drag_does_not_emit_position_clicked(main_window, tmp_path, app):
+    """拖曳（press 後移動 release）不該觸發 position_clicked（避免干擾文字選取）。"""
+    from PySide6.QtCore import QEvent, QPointF
+    from PySide6.QtGui import QMouseEvent
+    from PySide6.QtCore import Qt
+
+    sample = tmp_path / "s.txt"
+    sample.write_text("Hello world\n測試內容。\n", encoding="utf-8")
+    main_window.load_file(str(sample))
+    loop = QEventLoop(); QTimer.singleShot(150, loop.quit); loop.exec()
+
+    received = []
+    main_window.view.position_clicked.connect(lambda p: received.append(p))
+
+    # 模擬拖曳（press → 遠離原位置 → release）
+    press = QMouseEvent(
+        QEvent.Type.MouseButtonPress, QPointF(100, 50),
+        Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    release_far = QMouseEvent(
+        QEvent.Type.MouseButtonRelease, QPointF(200, 50),   # 100px away
+        Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    main_window.view.mousePressEvent(press)
+    main_window.view.mouseReleaseEvent(release_far)
+    assert received == [], "拖曳不該觸發 position_clicked"

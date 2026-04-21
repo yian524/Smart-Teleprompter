@@ -150,15 +150,27 @@ def test_edit_actions_on_annotation_toolbar(main_window):
     assert not main_window.edit_toolbar.isVisible()
 
 
-def test_all_edit_actions_always_enabled(main_window):
-    """所有 edit_toolbar action 永遠 enabled。"""
-    for act in (
+def test_edit_actions_visibility_follows_edit_mode(main_window):
+    """B/I/U/格式/插入註解/清理空白：非編輯模式隱藏、編輯模式顯示；
+    但螢光筆（🖍）永遠可見（綁在 annotation 層，可當色塊筆用）。"""
+    hidden_when_off = (
         main_window.act_bold, main_window.act_italic, main_window.act_underline,
-        main_window.act_highlight, main_window.act_clear_fmt,
-        main_window.act_clear_all_fmt,
+        main_window.act_clear_fmt, main_window.act_clear_all_fmt,
         main_window.act_insert_annotation, main_window.act_compact_ws,
-    ):
-        assert act.isEnabled(), f"{act.text()} 應 enabled"
+    )
+    always_visible = (
+        main_window.act_edit_mode, main_window.act_highlight,
+    )
+    # 非編輯模式
+    assert not main_window.view.is_edit_mode()
+    for act in hidden_when_off:
+        assert not act.isVisible(), f"{act.text()} 非編輯模式應隱藏"
+    for act in always_visible:
+        assert act.isVisible(), f"{act.text()} 應永遠可見"
+    # 進編輯模式
+    main_window.view.set_edit_mode(True)
+    for act in hidden_when_off:
+        assert act.isVisible(), f"{act.text()} 編輯模式應顯示"
 
 
 # ---- 🖍 螢光筆搬到 annotation_toolbar ----
