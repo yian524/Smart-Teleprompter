@@ -296,8 +296,6 @@ class PrompterView(QTextEdit):
         cursor.mergeCharFormat(fmt)
 
     def toggle_bold(self) -> None:
-        if not self._edit_mode:
-            return
         cursor = self.textCursor()
         if not cursor.hasSelection():
             return
@@ -310,8 +308,6 @@ class PrompterView(QTextEdit):
         self._apply_format_to_selection(fmt)
 
     def toggle_italic(self) -> None:
-        if not self._edit_mode:
-            return
         cursor = self.textCursor()
         if not cursor.hasSelection():
             return
@@ -323,8 +319,6 @@ class PrompterView(QTextEdit):
         self._apply_format_to_selection(fmt)
 
     def toggle_underline(self) -> None:
-        if not self._edit_mode:
-            return
         cursor = self.textCursor()
         if not cursor.hasSelection():
             return
@@ -337,8 +331,6 @@ class PrompterView(QTextEdit):
 
     def toggle_highlight(self) -> None:
         """螢光筆（黃色半透明底）。"""
-        if not self._edit_mode:
-            return
         from ..core.rich_text_format import HIGHLIGHT_RGB, highlight_brush_color
         cursor = self.textCursor()
         if not cursor.hasSelection():
@@ -359,8 +351,6 @@ class PrompterView(QTextEdit):
 
     def clear_format(self) -> None:
         """清除選取範圍的粗體/斜體/底線/螢光筆。"""
-        if not self._edit_mode:
-            return
         from ..core.rich_text_format import clear_format_in_range
         cursor = self.textCursor()
         if not cursor.hasSelection():

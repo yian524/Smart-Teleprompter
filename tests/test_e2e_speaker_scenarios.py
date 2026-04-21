@@ -424,21 +424,28 @@ def test_edit_exit_preserves_position_and_format(mw, sample_transcript, app):
     )
 
 
-def test_edit_toolbar_hidden_when_not_editing(mw, sample_transcript, app):
-    """編輯工具列在非編輯模式應完全隱藏。"""
+def test_edit_toolbar_always_visible_and_enabled(mw, sample_transcript, app):
+    """編輯工具列永遠可見、所有 action 永遠啟用。
+
+    （格式類直接作用於選取、結構類點擊會彈確認視窗；不再綁 edit_mode。）
+    """
     mw.load_file(str(sample_transcript))
     app.processEvents()
     assert not mw.view.is_edit_mode()
-    # 整條編輯工具列隱藏
-    assert not mw.edit_toolbar.isVisible(), "非編輯模式編輯工具列應隱藏"
-    # 進編輯 → 工具列可見 + actions 啟用
+    # 非編輯模式仍可見
+    assert mw.edit_toolbar.isVisible(), "edit_toolbar 應永遠顯示"
+    for act in (mw.act_bold, mw.act_italic, mw.act_underline,
+                mw.act_highlight, mw.act_clear_fmt, mw.act_clear_all_fmt,
+                mw.act_insert_annotation, mw.act_compact_ws):
+        assert act.isEnabled(), f"{act.text()} 應永遠啟用"
+    # 進編輯模式也是
     mw.view.set_edit_mode(True)
     app.processEvents()
-    assert mw.edit_toolbar.isVisible(), "編輯模式編輯工具列應顯示"
+    assert mw.edit_toolbar.isVisible()
     for act in (mw.act_bold, mw.act_italic, mw.act_underline,
                 mw.act_highlight, mw.act_clear_fmt,
                 mw.act_insert_annotation, mw.act_compact_ws):
-        assert act.isEnabled(), f"{act.text()} 在編輯模式應啟用"
+        assert act.isEnabled()
 
 
 # ============================================================

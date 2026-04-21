@@ -50,48 +50,105 @@ def _paint_sticky_body(
     font_family: str,
     resize_handle_size: int,
 ) -> None:
-    """統一的便利貼繪製：圓角 + 柔和陰影 + 折角 + 右下 resize handle。"""
-    # 1) 柔和陰影（往右下偏移 3px，半透明黑）
-    shadow = rect.adjusted(3, 3, 3, 3)
-    painter.setPen(Qt.PenStyle.NoPen)
-    painter.setBrush(QColor(0, 0, 0, 40))
-    painter.drawRoundedRect(shadow, 6, 6)
+    """漂亮版便利貼：多層陰影 + 折角 + 頂部色帶 + grip 拖曳指示 + resize dot。"""
+    painter.save()
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
-    # 2) 主體：圓角、半透明底色
-    bg = QColor(color)
-    bg.setAlpha(235)
-    painter.setPen(Qt.PenStyle.NoPen)
-    painter.setBrush(bg)
-    painter.drawRoundedRect(rect, 6, 6)
+    # 1) 多層陰影（模擬軟陰影），3 層疊加越遠越淡
+    for offset, alpha in [(1, 35), (3, 25), (6, 15)]:
+        shadow_rect = rect.adjusted(offset, offset, offset, offset)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(0, 0, 0, alpha))
+        painter.drawRoundedRect(shadow_rect, 8, 8)
 
-    # 3) 細邊框
-    pen = QPen(QColor(0, 0, 0, 80))
-    pen.setWidth(1)
-    painter.setPen(pen)
+    # 2) 主體色（不透明 → 看起來像紙）
+    base = QColor(color)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(base)
+    painter.drawRoundedRect(rect, 8, 8)
+
+    # 3) 頂部色帶（深一點，像黏貼條）
+    band_rect = QRect(rect.left(), rect.top(), rect.width(), 20)
+    band_path = QPainterPath()
+    band_path.addRoundedRect(QRectF(band_rect), 8.0, 8.0)
+    # 裁掉下半邊的圓角，讓色帶只有上面圓角
+    clip_path = QPainterPath()
+    clip_path.addRect(QRectF(band_rect))
+    band_path = band_path.intersected(clip_path)
+    darker_band = base.darker(115)   # 稍深
+    painter.setBrush(darker_band)
+    painter.drawPath(band_path)
+    # 底下一條細線分隔
+    sep_pen = QPen(base.darker(135))
+    sep_pen.setWidth(1)
+    painter.setPen(sep_pen)
+    painter.drawLine(
+        rect.left() + 6, rect.top() + 20,
+        rect.right() - 6, rect.top() + 20,
+    )
+
+    # 4) 頂部色帶上的 grip dots（告訴使用者「可拖拉」）
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QColor(255, 255, 255, 180))
+    cx = (rect.left() + rect.right()) // 2
+    cy = rect.top() + 10
+    for dx in (-8, 0, 8):
+        painter.drawEllipse(QPoint(cx + dx, cy), 2, 2)
+
+    # 5) 右上角折角（小三角，視覺上像紙的折痕）
+    fold_size = 12
+    fold_path = QPainterPath()
+    fold_path.moveTo(rect.right() - fold_size, rect.top())
+    fold_path.lineTo(rect.right(), rect.top())
+    fold_path.lineTo(rect.right(), rect.top() + fold_size)
+    fold_path.closeSubpath()
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(base.darker(130))
+    painter.drawPath(fold_path)
+
+    # 6) 整體細邊框
+    border_pen = QPen(base.darker(150))
+    border_pen.setWidth(1)
+    painter.setPen(border_pen)
     painter.setBrush(Qt.BrushStyle.NoBrush)
-    painter.drawRoundedRect(rect, 6, 6)
+    painter.drawRoundedRect(rect, 8, 8)
 
-    # 4) 文字
+    # 7) 文字內容（色帶下方，留出 resize handle 空間）
     if text:
         painter.setPen(QColor("#1A1A1A"))
         f = QFont(font_family, 11)
         painter.setFont(f)
+        text_rect = QRect(
+            rect.left() + 10,
+            rect.top() + 26,  # 色帶下方
+            rect.width() - 20,
+            rect.height() - 26 - resize_handle_size - 4,
+        )
         painter.drawText(
-            rect.adjusted(10, 8, -10, -resize_handle_size - 4),
-            Qt.AlignmentFlag.AlignLeft | Qt.TextFlag.TextWordWrap,
+            text_rect,
+            Qt.AlignmentFlag.AlignLeft
+            | Qt.AlignmentFlag.AlignTop
+            | Qt.TextFlag.TextWordWrap,
             text,
         )
 
-    # 5) 右下角 resize handle（兩條斜線的 L 形）
+    # 8) 右下角 resize handle：兩個小方點 + 一個斜角三角 → 明確的「可縮放」指示
     s = resize_handle_size
     x2 = rect.right()
     y2 = rect.bottom()
-    pen = QPen(QColor(0, 0, 0, 120))
-    pen.setWidth(2)
-    painter.setPen(pen)
-    painter.setBrush(Qt.BrushStyle.NoBrush)
-    painter.drawLine(x2 - s + 3, y2 - 3, x2 - 3, y2 - s + 3)
-    painter.drawLine(x2 - s + 8, y2 - 3, x2 - 3, y2 - s + 8)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QColor(0, 0, 0, 110))
+    # 3 顆小點沿斜角排列
+    for (dx, dy) in [(4, 4), (8, 4), (4, 8)]:
+        painter.drawEllipse(QPoint(x2 - dx, y2 - dy), 1, 1)
+    # 底部 & 右側邊緣各一條短粗線，明確劃出 handle 範圍
+    corner_pen = QPen(QColor(0, 0, 0, 150))
+    corner_pen.setWidth(2)
+    painter.setPen(corner_pen)
+    painter.drawLine(x2 - 10, y2 - 3, x2 - 3, y2 - 3)
+    painter.drawLine(x2 - 3, y2 - 10, x2 - 3, y2 - 3)
+
+    painter.restore()
 
 
 class SlideModeView(QWidget):

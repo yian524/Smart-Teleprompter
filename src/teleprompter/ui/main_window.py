@@ -781,16 +781,19 @@ class MainWindow(QMainWindow):
         self.addToolBarBreak()   # 另起一行
         self.addToolBar(self.edit_toolbar)
 
+        # ── 結構區（會改動講稿文字，點擊會先彈確認視窗）──
         self.act_insert_annotation = QAction("💬 插入註解", self)
+        self.act_insert_annotation.setToolTip("⚠ 會改動講稿文字：在游標位置插入備忘註解")
         self.act_insert_annotation.triggered.connect(self._insert_annotation)
         self.edit_toolbar.addAction(self.act_insert_annotation)
 
         self.act_compact_ws = QAction("🧹 清理空白", self)
-        self.act_compact_ws.setToolTip("移除多餘空白行與行尾空白，段落間只保留一個空白行")
+        self.act_compact_ws.setToolTip("⚠ 會改動講稿文字：移除多餘空白行與行尾空白")
         self.act_compact_ws.triggered.connect(self._compact_whitespace)
         self.edit_toolbar.addAction(self.act_compact_ws)
 
         self.edit_toolbar.addSeparator()
+        # ── 格式區（只改視覺樣式，不動文字；直接執行不確認）──
 
         self.act_bold = QAction("B", self)
         self.act_bold.setToolTip("粗體 (Ctrl+B)")
@@ -831,14 +834,8 @@ class MainWindow(QMainWindow):
         self.act_clear_all_fmt.triggered.connect(self._clear_all_formatting)
         self.edit_toolbar.addAction(self.act_clear_all_fmt)
 
-        # 預設隱藏整條 edit toolbar（只在編輯模式顯示）
-        self.edit_toolbar.setVisible(False)
-        for act in (
-            self.act_insert_annotation, self.act_compact_ws,
-            self.act_bold, self.act_italic, self.act_underline,
-            self.act_highlight, self.act_clear_fmt, self.act_clear_all_fmt,
-        ):
-            act.setEnabled(False)
+        # edit_toolbar 永遠顯示、所有 action 永遠 enabled
+        # （格式類直接作用於選取；結構類會彈確認視窗）
 
         # 編輯模式切換時重設結果（MD 重新 parse）
         self.view.text_edited.connect(self._on_transcript_edited)
@@ -2376,10 +2373,22 @@ class MainWindow(QMainWindow):
         return total_slides - transcript_pages
 
     def _insert_annotation(self) -> None:
-        """在游標處插入 <!-- ... --> 註解（僅編輯模式可用）。"""
-        if not self.view.is_edit_mode():
+        """在游標處插入 <!-- ... --> 註解。會新增文字 → 先彈確認視窗。"""
+        ret = QMessageBox.question(
+            self, "新增文字確認",
+            "將在目前游標位置插入備忘註解 `<!-- 備忘 -->`。\n這會改動講稿文字。\n\n確定要插入嗎？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if ret != QMessageBox.StandardButton.Yes:
             return
+        was_edit = self.view.is_edit_mode()
+        if not was_edit:
+            self.view.set_edit_mode(True)
         self.view.insert_annotation_at_cursor("")
+        if not was_edit:
+            # 切回唯讀（會觸發 text_edited 信號把變更寫回 session）
+            self.view.set_edit_mode(False)
 
     def _clear_all_formatting(self) -> None:
         """救援按鈕：清除整篇文字的粗體/斜體/底線/螢光筆，並清除 session 中保存的 format_spans。"""
@@ -2391,25 +2400,26 @@ class MainWindow(QMainWindow):
         self.status_recognized.setText("🧽 已清除整篇格式")
 
     def _compact_whitespace(self) -> None:
-        """一鍵清理多餘空白（僅編輯模式可用）。"""
-        if not self.view.is_edit_mode():
+        """一鍵清理多餘空白與空行。會刪除文字 → 先彈確認視窗。"""
+        ret = QMessageBox.question(
+            self, "刪除文字確認",
+            "將清除講稿中的多餘空白行與行尾空白。\n這會改動講稿文字。\n\n確定要清理嗎？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if ret != QMessageBox.StandardButton.Yes:
             return
+        was_edit = self.view.is_edit_mode()
+        if not was_edit:
+            self.view.set_edit_mode(True)
         self.view.compact_whitespace()
+        if not was_edit:
+            self.view.set_edit_mode(False)
         self.status_recognized.setText("🧹 已清理多餘空白")
 
     def _on_edit_mode_changed(self, enabled: bool) -> None:
-        self.edit_toolbar.setVisible(enabled)
-        for act in (
-            self.act_insert_annotation,
-            self.act_compact_ws,
-            self.act_bold,
-            self.act_italic,
-            self.act_underline,
-            self.act_highlight,
-            self.act_clear_fmt,
-            self.act_clear_all_fmt,
-        ):
-            act.setEnabled(enabled)
+        # edit_toolbar 永遠可見；所有 action 永遠 enabled
+        # 編輯模式只控制「直接鍵入」（QTextEdit.setReadOnly）
         if enabled:
             self.act_edit_mode.setText("✏ 編輯模式 (ON)")
         else:
