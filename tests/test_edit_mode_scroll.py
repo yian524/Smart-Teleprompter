@@ -44,8 +44,11 @@ def test_edit_mode_preserves_scroll_across_md_refresh(main_window, tmp_path, app
     4. 220ms 後 MD refresh 執行 → scroll 不得被拉回游標（頂端）
     """
     # 造一份夠長的講稿，確保 scroll bar 有空間
+    # （1200 行 × 中英文填充，跨分頁情境、跨 viewport 尺寸都有 scroll）
     sample = tmp_path / "long.txt"
-    long_text = "\n".join([f"第 {i} 行的內容。這是一些填充文字。" for i in range(200)])
+    long_text = "\n".join(
+        [f"第 {i} 行的內容，這是一些填充文字供測試 scroll 使用。" for i in range(1200)]
+    )
     sample.write_text(long_text, encoding="utf-8")
     main_window.load_file(str(sample))
     loop = QEventLoop(); QTimer.singleShot(200, loop.quit); loop.exec()
