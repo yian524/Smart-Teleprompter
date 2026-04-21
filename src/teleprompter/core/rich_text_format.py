@@ -30,8 +30,9 @@ HIGHLIGHT_ALPHA = 110   # ~43% 透明
 HIGHLIGHT_RGB = QColor(HIGHLIGHT_COLOR_HEX).rgb() & 0x00FFFFFF
 
 
-def highlight_brush_color() -> QColor:
-    c = QColor(HIGHLIGHT_COLOR_HEX)
+def highlight_brush_color(color_hex: str = HIGHLIGHT_COLOR_HEX) -> QColor:
+    """產生螢光筆用的半透明底色（預設黃；可傳任意顏色）。"""
+    c = QColor(color_hex)
     c.setAlpha(HIGHLIGHT_ALPHA)
     return c
 
@@ -44,30 +45,41 @@ class FormatSpan:
     italic: bool = False
     underline: bool = False
     highlight: bool = False
+    # highlight 的實際顏色（RGB hex，例如 "#FFEB3B"）；僅當 highlight=True 時有意義
+    highlight_color: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return dataclasses.asdict(self)
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "FormatSpan":
+        # 相容舊資料（沒 highlight_color 欄位）
+        if "highlight_color" not in d:
+            d = {**d, "highlight_color": ""}
         return cls(**d)
 
     def is_empty(self) -> bool:
         return not (self.bold or self.italic or self.underline or self.highlight)
 
 
-def _char_attrs(fmt: QTextCharFormat) -> tuple[bool, bool, bool, bool]:
-    """(bold, italic, underline, highlight) 四旗標。"""
+def _char_attrs(fmt: QTextCharFormat) -> tuple[bool, bool, bool, bool, str]:
+    """(bold, italic, underline, highlight, highlight_color_hex) 五項旗標。
+    highlight_color_hex 只在 highlight=True 時有效；否則為空字串。
+    """
     bold = fmt.fontWeight() >= QFont.Weight.Bold
     italic = fmt.fontItalic()
     underline = fmt.fontUnderline()
     bg = fmt.background()
     highlight = False
+    color_hex = ""
     if bg.style() != Qt.BrushStyle.NoBrush:
         color = bg.color()
-        if color.alpha() > 0 and (color.rgb() & 0x00FFFFFF) == HIGHLIGHT_RGB:
+        if color.alpha() > 0:
             highlight = True
-    return bold, italic, underline, highlight
+            # 取得 RGB hex（不含 alpha）
+            c_noalpha = QColor(color.red(), color.green(), color.blue())
+            color_hex = c_noalpha.name()
+    return bold, italic, underline, highlight, color_hex
 
 
 def dump_formats(doc: QTextDocument) -> list[FormatSpan]:
@@ -96,24 +108,26 @@ def dump_formats(doc: QTextDocument) -> list[FormatSpan]:
                         cur_attrs = frag_attrs
                         span_start_in_block = block_offset
                     elif frag_attrs != cur_attrs:
-                        if any(cur_attrs):
+                        if any(cur_attrs[:4]):
                             spans.append(FormatSpan(
                                 start=block_start + span_start_in_block,
                                 end=block_start + block_offset,
                                 bold=cur_attrs[0], italic=cur_attrs[1],
                                 underline=cur_attrs[2], highlight=cur_attrs[3],
+                                highlight_color=cur_attrs[4],
                             ))
                         cur_attrs = frag_attrs
                         span_start_in_block = block_offset
                     block_offset += 1
             it += 1
         # block 尾端 flush（不讓 span 跨 newline）
-        if cur_attrs is not None and any(cur_attrs):
+        if cur_attrs is not None and any(cur_attrs[:4]):
             spans.append(FormatSpan(
                 start=block_start + span_start_in_block,
                 end=block_start + block_offset,
                 bold=cur_attrs[0], italic=cur_attrs[1],
                 underline=cur_attrs[2], highlight=cur_attrs[3],
+                highlight_color=cur_attrs[4],
             ))
         block = block.next()
 
@@ -178,7 +192,10 @@ def restore_formats(doc: QTextDocument, spans: list[FormatSpan]) -> None:
         if span.underline:
             fmt.setFontUnderline(True)
         if span.highlight:
-            fmt.setBackground(highlight_brush_color())
+            # 用 span 自己記錄的顏色；若沒存（舊資料）用預設黃
+            fmt.setBackground(
+                highlight_brush_color(span.highlight_color or HIGHLIGHT_COLOR_HEX)
+            )
         cursor.mergeCharFormat(fmt)
 
 

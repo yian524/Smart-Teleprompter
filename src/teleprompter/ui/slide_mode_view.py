@@ -157,6 +157,7 @@ class SlideModeView(QWidget):
     page_navigate_requested = Signal(int)   # Left = -1、Right = +1
     annotations_changed = Signal()           # 標註有變動（新增/刪除/編輯）→ 通知 session 存檔
     text_copied = Signal(str)                # 選字複製 → 通知狀態列
+    tool_requested = Signal(str)              # 要求 MainWindow 切成其他 tool（例如貼完便利貼回指標）
 
     # 工具列模式
     TOOL_POINTER = "pointer"
@@ -788,6 +789,8 @@ class SlideModeView(QWidget):
         self._annotations.append(ann)
         self.annotations_changed.emit()
         self.update()
+        # 貼完便利貼自動回指標工具（不要卡在 note 模式）
+        self.tool_requested.emit(self.TOOL_POINTER)
 
     # 橡皮擦半徑（像素）
     ERASER_RADIUS = 18

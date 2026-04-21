@@ -158,3 +158,82 @@ def test_all_edit_actions_always_enabled(main_window):
         main_window.act_insert_annotation, main_window.act_compact_ws,
     ):
         assert act.isEnabled(), f"{act.text()} 應 enabled"
+
+
+# ---- 🖍 螢光筆搬到 annotation_toolbar ----
+
+
+def test_highlight_moved_to_annotation_toolbar(main_window):
+    """🖍 螢光筆 應該在 annotation_toolbar，不再在 edit_toolbar。"""
+    assert main_window.act_highlight in main_window.annotation_toolbar.actions()
+    assert main_window.act_highlight not in main_window.edit_toolbar.actions()
+
+
+def test_highlight_uses_tool_color(main_window, tmp_path, app):
+    """螢光筆顏色跟著 _tool_color（顏色按鈕會同時影響鉛筆 + 螢光筆）。"""
+    _load_simple(main_window, tmp_path)
+    # 換色到紅
+    main_window._set_annotation_color("#F44336")
+    cur = main_window.view.textCursor()
+    cur.setPosition(0)
+    cur.setPosition(3, QTextCursor.MoveMode.KeepAnchor)
+    main_window.view.setTextCursor(cur)
+    main_window.view.toggle_highlight()
+    spans = main_window.view.dump_format_spans()
+    hl = [s for s in spans if s.highlight]
+    assert hl, "套上螢光筆"
+    # 顏色應接近紅（不是預設的黃）
+    stored = hl[0].highlight_color.lower()
+    assert "f4" in stored or "#f4" in stored, f"顏色應是紅色，不是 {stored}"
+
+
+# ---- 貼完便利貼自動回指標 ----
+
+
+def test_sticky_note_auto_switches_back_to_pointer(main_window, tmp_path, app, monkeypatch):
+    """貼完便利貼 → tool 自動切回 pointer。"""
+    from PySide6.QtWidgets import QInputDialog
+
+    _load_simple(main_window, tmp_path)
+    monkeypatch.setattr(
+        QInputDialog, "getMultiLineText",
+        staticmethod(lambda *a, **kw: ("筆記", True)),
+    )
+    # 切到便利貼工具
+    main_window._set_annotation_tool("note")
+    assert main_window.view.current_tool() == "note"
+    # 貼一個便利貼（透過 view 的 add 方法）
+    from PySide6.QtCore import QPoint
+    main_window.view._add_sticky_note_at_viewport(QPoint(50, 50))
+    loop = QEventLoop(); QTimer.singleShot(50, loop.quit); loop.exec()
+    # 工具應自動切回 pointer
+    assert main_window.view.current_tool() == "pointer"
+
+
+# ---- 兩個清除按鈕都要確認 ----
+
+
+def test_clear_all_formatting_needs_confirmation(main_window, tmp_path, app, monkeypatch):
+    """❌ 清文字格式 按下 → 彈確認視窗；No → 格式不變。"""
+    _load_simple(main_window, tmp_path)
+    # 套粗體
+    cur = main_window.view.textCursor()
+    cur.setPosition(0)
+    cur.setPosition(3, QTextCursor.MoveMode.KeepAnchor)
+    main_window.view.setTextCursor(cur)
+    main_window.view.toggle_bold()
+    assert any(s.bold for s in main_window.view.dump_format_spans())
+    # 拒絕確認 → 不動
+    monkeypatch.setattr(
+        QMessageBox, "question",
+        staticmethod(lambda *a, **kw: QMessageBox.StandardButton.No),
+    )
+    main_window._clear_all_formatting()
+    assert any(s.bold for s in main_window.view.dump_format_spans()), "拒絕確認不該清"
+    # 同意 → 清
+    monkeypatch.setattr(
+        QMessageBox, "question",
+        staticmethod(lambda *a, **kw: QMessageBox.StandardButton.Yes),
+    )
+    main_window._clear_all_formatting()
+    assert not any(s.bold for s in main_window.view.dump_format_spans()), "同意後應清"

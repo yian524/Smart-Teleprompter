@@ -474,6 +474,9 @@ class MainWindow(QMainWindow):
         self.view.annotations_changed.connect(self._on_annotations_changed)
         # 選字複製 → 顯示在狀態列
         self.slide_mode_view.text_copied.connect(self._on_text_copied_from_slide)
+        # 兩個 view 要求切工具時（例如貼完便利貼回指標）
+        self.slide_mode_view.tool_requested.connect(self._set_annotation_tool)
+        self.view.tool_requested.connect(self._set_annotation_tool)
         # 左側縮圖列：點縮圖跳頁、方向鍵逐頁、收合按鈕
         self.slide_preview.page_requested.connect(self._on_slide_page_requested)
         self.slide_preview.page_navigate_requested.connect(self._navigate_page)
@@ -733,9 +736,18 @@ class MainWindow(QMainWindow):
 
         self.btn_color_custom = QToolButton()
         self.btn_color_custom.setText("🎨")
-        self.btn_color_custom.setToolTip("自訂顏色…")
+        self.btn_color_custom.setToolTip("自訂顏色（套用到鉛筆 + 螢光筆 + 便利貼）")
         self.btn_color_custom.clicked.connect(self._pick_custom_color)
         self.annotation_toolbar.addWidget(self.btn_color_custom)
+
+        # 🖍 螢光筆（從 edit_toolbar 搬過來，共用顏色）
+        self.act_highlight = QAction("🖍 螢光筆", self)
+        self.act_highlight.setToolTip(
+            "把選取的講稿文字加上背景色（顏色跟鉛筆共用）(Ctrl+H)"
+        )
+        self.act_highlight.setShortcut("Ctrl+H")
+        self.act_highlight.triggered.connect(self.view.toggle_highlight)
+        self.annotation_toolbar.addAction(self.act_highlight)
 
         self.annotation_toolbar.addSeparator()
 
@@ -813,13 +825,7 @@ class MainWindow(QMainWindow):
         self.act_underline.triggered.connect(self.view.toggle_underline)
         self.edit_toolbar.addAction(self.act_underline)
 
-        self.act_highlight = QAction("🖍", self)
-        self.act_highlight.setToolTip(
-            "【文字格式】螢光筆 — 把選取文字加上黃色背景色 (Ctrl+H)"
-        )
-        self.act_highlight.setShortcut("Ctrl+H")
-        self.act_highlight.triggered.connect(self.view.toggle_highlight)
-        self.edit_toolbar.addAction(self.act_highlight)
+        # 螢光筆已移到 annotation_toolbar（鉛筆旁邊，共用顏色）
 
         self.act_clear_fmt = QAction("✖格式", self)
         self.act_clear_fmt.setToolTip("清除選取範圍的格式 (Ctrl+\\)")
@@ -1934,6 +1940,19 @@ class MainWindow(QMainWindow):
         """
         self.view.set_tool(tool)
         self.slide_mode_view.set_tool(tool)
+        # 同步 toolbar 的 checked 狀態（避免程式改 tool 時按鈕沒跟著）
+        tool_to_act = {
+            "pointer": getattr(self, "act_tool_pointer", None),
+            "pencil": getattr(self, "act_tool_pencil", None),
+            "note": getattr(self, "act_tool_note", None),
+            "eraser": getattr(self, "act_tool_eraser", None),
+        }
+        for t, act in tool_to_act.items():
+            if act is None:
+                continue
+            act.blockSignals(True)
+            act.setChecked(t == tool)
+            act.blockSignals(False)
 
     def _on_text_copied_from_slide(self, text: str) -> None:
         """投影片上的文字被複製 → status bar 提示。"""
@@ -2391,7 +2410,16 @@ class MainWindow(QMainWindow):
             self.view.set_edit_mode(False)
 
     def _clear_all_formatting(self) -> None:
-        """救援按鈕：清除整篇文字的粗體/斜體/底線/螢光筆，並清除 session 中保存的 format_spans。"""
+        """清除整篇文字格式（粗體/斜體/底線/螢光筆）。會動到文字外觀 → 先彈確認視窗。"""
+        ret = QMessageBox.question(
+            self, "清除文字格式確認",
+            "將清除整篇講稿的**所有文字格式**（粗體 / 斜體 / 底線 / 螢光筆）。\n"
+            "這個動作無法復原。\n\n確定要清除嗎？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if ret != QMessageBox.StandardButton.Yes:
+            return
         self.view.clear_all_formatting()
         active = self.session_manager.active
         if active is not None:

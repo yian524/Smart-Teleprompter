@@ -50,6 +50,7 @@ class PrompterView(QTextEdit):
     text_edited = Signal(str)  # 編輯模式關閉時發出最新文本
     slide_double_clicked = Signal(int)  # 雙擊右欄 slide → 發該 page_no
     annotations_changed = Signal()    # 標註有變動 → 通知 MainWindow 存檔
+    tool_requested = Signal(str)      # 要求 MainWindow 切成其他 tool
 
     # 工具 const（與 slide_mode_view 相同字串，MainWindow 可統一派送）
     TOOL_POINTER = "pointer"
@@ -330,8 +331,10 @@ class PrompterView(QTextEdit):
         self._apply_format_to_selection(fmt)
 
     def toggle_highlight(self) -> None:
-        """螢光筆（黃色半透明底）。"""
-        from ..core.rich_text_format import HIGHLIGHT_RGB, highlight_brush_color
+        """螢光筆。顏色沿用當前 _tool_color（與鉛筆共用）。
+        已 highlight → 清掉；尚未 highlight → 套當前顏色。
+        """
+        from ..core.rich_text_format import highlight_brush_color
         cursor = self.textCursor()
         if not cursor.hasSelection():
             return
@@ -340,13 +343,13 @@ class PrompterView(QTextEdit):
         bg = probe.charFormat().background()
         is_highlight = (
             bg.style() != Qt.BrushStyle.NoBrush
-            and (bg.color().rgb() & 0x00FFFFFF) == HIGHLIGHT_RGB
+            and bg.color().alpha() > 0
         )
         fmt = QTextCharFormat()
         if is_highlight:
             fmt.setBackground(Qt.BrushStyle.NoBrush)
         else:
-            fmt.setBackground(highlight_brush_color())
+            fmt.setBackground(highlight_brush_color(self._tool_color.name()))
         self._apply_format_to_selection(fmt)
 
     def clear_format(self) -> None:
@@ -1644,6 +1647,8 @@ class PrompterView(QTextEdit):
         self._annotations.append(ann)
         self.annotations_changed.emit()
         self.viewport().update()
+        # 貼完便利貼自動回指標工具
+        self.tool_requested.emit(self.TOOL_POINTER)
 
     ERASER_RADIUS = 18
 
