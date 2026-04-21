@@ -2455,6 +2455,21 @@ class MainWindow(QMainWindow):
         if checked:
             if self.audio.is_running():
                 self._pause()
+            # slide 模式 / 直屏 split 都是 stack 1（SlideModeView）— 看不到 PrompterView
+            # 無法視覺化編輯。記住原本模式，暫時切到 split（橫屏）或 transcript（直屏）
+            # 讓使用者在 PrompterView 中直接看游標與輸入。離開編輯模式時再還原。
+            self._pre_edit_view_mode: str | None = None
+            if self._content_stack.currentIndex() == 1:
+                self._pre_edit_view_mode = self._view_mode
+                # 決定要暫切到哪個模式：橫屏切 split（保留 slide 參考），直屏切 transcript（滿版文字）
+                is_portrait = self.width() < self.height()
+                target = "transcript" if is_portrait else "split"
+                # 若原本就是 split，強制先切 transcript 再切回，避免 split→split noop
+                if target == "split" and self._view_mode == "split":
+                    # 直接退回 PrompterView（embedded slide）— split 在橫屏是 stack 0
+                    self._set_view_mode("split")
+                else:
+                    self._set_view_mode(target)
             # 用「視窗頂端實際看到的 char」為準（使用者視角的位置）
             self._pre_edit_char = self.view.visible_top_char()
             self._pre_edit_scroll = self.view.verticalScrollBar().value()
@@ -2465,9 +2480,14 @@ class MainWindow(QMainWindow):
             # 若 slide > 講稿頁數：自動補 placeholder block 讓每頁都能點擊編輯
             inserted_n = self._expand_transcript_for_slides()
             self.view.set_edit_mode(True)
+            self.view.setFocus()
             if inserted_n > 0:
                 self.status_recognized.setText(
                     f"✏ 編輯模式（已為 {inserted_n} 張多餘的投影片追加空白講稿區塊，可點擊輸入）"
+                )
+            elif self._pre_edit_view_mode is not None:
+                self.status_recognized.setText(
+                    "✏ 編輯模式：已切到講稿區編輯，離開編輯模式會回到原本檢視"
                 )
             else:
                 self.status_recognized.setText("✏ 編輯模式：可直接修改講稿，再按一次離開")
@@ -2510,6 +2530,11 @@ class MainWindow(QMainWindow):
             # 5) 保存到 session
             if self.session_manager.active is not None:
                 self.session_manager.active.format_spans = formats_to_keep
+            # 6) 若進入編輯模式前曾暫切檢視模式 → 還原
+            pre_mode = getattr(self, "_pre_edit_view_mode", None)
+            if pre_mode is not None and pre_mode != self._view_mode:
+                self._set_view_mode(pre_mode)
+            self._pre_edit_view_mode = None
 
     def _expand_transcript_for_slides(self) -> int:
         """若 slide_deck 的頁數 > 講稿頁數，為每張多餘的 slide 追加一個空白 `---` + `# Slide N` 區塊。
