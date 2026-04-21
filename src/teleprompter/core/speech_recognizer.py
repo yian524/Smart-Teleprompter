@@ -335,11 +335,19 @@ class SpeechRecognizerWorker(QObject):
             best_of=1,
             temperature=0.0,
             vad_filter=True,
-            vad_parameters={"min_silence_duration_ms": 500},
+            # VAD 放寬：較低的 speech threshold + 較短的靜音判定，避免小聲講話被整段丟掉
+            # （Silero 預設 threshold=0.5 對低音量麥克風太嚴，常把整段人聲誤判為靜音）
+            vad_parameters={
+                "threshold": 0.3,
+                "min_silence_duration_ms": 300,
+                "speech_pad_ms": 200,
+            },
             condition_on_previous_text=False,
-            no_speech_threshold=0.8,             # 進一步提高（原 0.7）
-            log_prob_threshold=-0.8,             # 進一步提高（原 -1.0）
-            compression_ratio_threshold=2.2,     # 略嚴的過度重複檢測
+            # 回到 whisper 預設值。更嚴格的 0.8 / -0.8 雖能阻擋 hallucination，但也會
+            # 擋掉真實低信心的語音；交給 _is_hallucination 後濾做防線即可。
+            no_speech_threshold=0.6,
+            log_prob_threshold=-1.0,
+            compression_ratio_threshold=2.2,     # 保留略嚴的過度重複檢測
         )
         pieces: list[str] = []
         for s in segments_iter:
