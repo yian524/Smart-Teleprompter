@@ -246,6 +246,19 @@ class PrompterView(QTextEdit):
         cursor = self.textCursor()
         if not cursor.hasSelection():
             return
+        # 防呆：選取範圍 > 90% 全文 → 疑似誤觸 Ctrl+A，要求確認
+        sel_len = cursor.selectionEnd() - cursor.selectionStart()
+        if sel_len > max(50, self._doc_length * 0.9):
+            from PySide6.QtWidgets import QMessageBox
+            ret = QMessageBox.question(
+                self, "全文選取確認",
+                f"目前選取了 {sel_len} 字（接近整篇）。\n"
+                "是否確定要把整篇文字都套上這個格式？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if ret != QMessageBox.StandardButton.Yes:
+                return
         cursor.mergeCharFormat(fmt)
 
     def toggle_bold(self) -> None:
@@ -296,19 +309,6 @@ class PrompterView(QTextEdit):
         cursor = self.textCursor()
         if not cursor.hasSelection():
             return
-        # 防呆：若選取範圍接近整篇（>90%），多半是誤觸 Ctrl+A
-        sel_len = cursor.selectionEnd() - cursor.selectionStart()
-        if sel_len > max(50, self._doc_length * 0.9):
-            from PySide6.QtWidgets import QMessageBox, QApplication
-            ret = QMessageBox.question(
-                self, "全文選取確認",
-                f"目前選取了 {sel_len} 字（接近整篇）。\n"
-                "確定要把整篇講稿都套螢光筆嗎？",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
-            )
-            if ret != QMessageBox.StandardButton.Yes:
-                return
         probe = QTextCursor(cursor)
         probe.setPosition(cursor.selectionStart())
         bg = probe.charFormat().background()
