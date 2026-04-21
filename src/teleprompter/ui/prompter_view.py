@@ -920,11 +920,11 @@ class PrompterView(QTextEdit):
                 hr_pen.setWidth(2)
 
                 hr_points: list[tuple[int, int]] = []  # (doc_y, label_no；0 = 無標籤)
-                # 頂部（第 1 頁上方），無標籤
-                hr_points.append((self._page_boundaries[0][0], 0))
-                # 每頁底 = 下頁頂；最後一頁底部不顯示標籤（純線）
+                # 頂部（第 1 頁開頭）→ 顯示「第 1 頁」作為 header
+                hr_points.append((self._page_boundaries[0][0], 1))
+                # 每頁底 = 下頁頂；label 指「下一頁」當作下一頁 header；最後一頁底無下一頁 → 0
                 for k, (_, bottom_y) in enumerate(self._page_boundaries):
-                    label = k + 1 if k + 1 < total else 0
+                    label = k + 2 if k + 1 < total else 0
                     hr_points.append((bottom_y, label))
 
                 for doc_y, label_no in hr_points:
@@ -1244,6 +1244,8 @@ class PrompterView(QTextEdit):
         n_transcript_covered = min(transcript_pages, total_slides)
 
         # Phase 1：有對應講稿的頁，計算文字自然高度並補齊到 slide 高度
+        # padding 優先放到**下一頁第一個 block 的 topMargin**，讓「空白區域」屬於下一頁 —
+        # 使用者點擊空白處 → 游標落在下一頁開頭（符合直覺：水平線下就是下一頁）
         for k in range(n_transcript_covered):
             top_block = self._page_top_block(k)
             last_block = self._page_last_block(k)
@@ -1258,11 +1260,21 @@ class PrompterView(QTextEdit):
             need_h = slide_h + self._SLIDE_GAP_TOP_BOTTOM * 2
             if need_h > text_h:
                 pad = need_h - text_h
-                cursor = QTextCursor(last_block)
-                bf = cursor.blockFormat()
-                bf.setBottomMargin(pad)
-                cursor.setBlockFormat(bf)
-                bottom_y = top_y + need_h
+                next_top = self._page_top_block(k + 1) if k + 1 < n_transcript_covered else None
+                if next_top is not None and next_top.isValid():
+                    # 下一頁第一個 block 加 topMargin → 空白區點擊歸屬下一頁
+                    cursor = QTextCursor(next_top)
+                    bf = cursor.blockFormat()
+                    bf.setTopMargin(pad)
+                    cursor.setBlockFormat(bf)
+                    bottom_y = top_y + need_h
+                else:
+                    # 最後一頁：沒下一頁可承接，只好 bottomMargin
+                    cursor = QTextCursor(last_block)
+                    bf = cursor.blockFormat()
+                    bf.setBottomMargin(pad)
+                    cursor.setBlockFormat(bf)
+                    bottom_y = top_y + need_h
             else:
                 bottom_y = text_bottom_y
             self._page_boundaries.append((top_y, bottom_y))
