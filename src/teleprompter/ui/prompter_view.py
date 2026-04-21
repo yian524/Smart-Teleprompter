@@ -1246,6 +1246,9 @@ class PrompterView(QTextEdit):
         # Phase 1：有對應講稿的頁，計算文字自然高度並補齊到 slide 高度
         # padding 優先放到**下一頁第一個 block 的 topMargin**，讓「空白區域」屬於下一頁 —
         # 使用者點擊空白處 → 游標落在下一頁開頭（符合直覺：水平線下就是下一頁）
+        # 最後一頁沒下一頁可以承接 → 累加到 trailing_pad，最後用 rootFrame.bottomMargin
+        # （block 的 bottomMargin 不會延伸 document 的 scrollable height，會導致捲到底仍看不到最後一頁 slide）
+        trailing_pad = 0
         for k in range(n_transcript_covered):
             top_block = self._page_top_block(k)
             last_block = self._page_last_block(k)
@@ -1269,11 +1272,8 @@ class PrompterView(QTextEdit):
                     cursor.setBlockFormat(bf)
                     bottom_y = top_y + need_h
                 else:
-                    # 最後一頁：沒下一頁可承接，只好 bottomMargin
-                    cursor = QTextCursor(last_block)
-                    bf = cursor.blockFormat()
-                    bf.setBottomMargin(pad)
-                    cursor.setBlockFormat(bf)
+                    # 最後一頁：交給 rootFrame.bottomMargin 承接（延後於 Phase 2 一併套用）
+                    trailing_pad = pad
                     bottom_y = top_y + need_h
             else:
                 bottom_y = text_bottom_y
@@ -1296,17 +1296,19 @@ class PrompterView(QTextEdit):
                 total_virtual_h += page_h
             # Qt 的 last block bottomMargin 不會延伸 documentSize（沒有後續 block 要分隔）。
             # 改用 QTextFrameFormat.bottomMargin 直接加到 root frame，這會確實延伸文件高度。
-            if total_virtual_h > 0:
+            # 最後一頁 Phase 1 的 trailing_pad 也要一併加上。
+            root_bottom = total_virtual_h + trailing_pad
+            if root_bottom > 0:
                 root = doc.rootFrame()
                 ff = root.frameFormat()
-                ff.setBottomMargin(total_virtual_h)
+                ff.setBottomMargin(root_bottom)
                 root.setFrameFormat(ff)
         else:
-            # 沒有虛擬頁 → 清除 root frame bottomMargin
+            # 沒有虛擬頁 → 若 Phase 1 有 trailing_pad（最後一頁需要額外空間），用 rootFrame 承接
             root = doc.rootFrame()
             ff = root.frameFormat()
-            if ff.bottomMargin() > 0:
-                ff.setBottomMargin(0)
+            if ff.bottomMargin() != trailing_pad:
+                ff.setBottomMargin(trailing_pad)
                 root.setFrameFormat(ff)
 
     # ---------- 逐頁尺寸與填補（供 MainWindow 對齊用） ----------
