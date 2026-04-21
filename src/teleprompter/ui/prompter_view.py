@@ -53,30 +53,34 @@ class _SplitHandle(QWidget):
 
     def enterEvent(self, event) -> None:  # noqa: N802
         self._hover = True
-        self.update()
+        # 觸發 parent（PrompterView 的 viewport）重繪把線畫在最上層
+        if self.parent() is not None:
+            self.parent().update()
 
     def leaveEvent(self, event) -> None:  # noqa: N802
         self._hover = False
-        self.update()
+        if self.parent() is not None:
+            self.parent().update()
 
     def paintEvent(self, event) -> None:  # noqa: N802
-        from PySide6.QtGui import QPainter, QColor
-        painter = QPainter(self)
-        # 常駐顯示半透明藍分隔線；hover / drag 更亮
+        # 實際線條由 PrompterView.paintEvent 最後一步畫（確保不被 slide 圖蓋掉），
+        # 本 widget 只吃滑鼠事件，自身不畫。
+        pass
+
+    def current_color(self):
+        from PySide6.QtGui import QColor
         if self._dragging:
-            color = QColor("#4CAF50")       # 拖拉中：綠
-        elif self._hover:
-            color = QColor("#80D8FF")       # hover：亮藍
-        else:
-            color = QColor(128, 200, 255, 140)  # 常駐：半透明藍（永不消失）
-        painter.fillRect(3, 0, 2, self.height(), color)
-        painter.end()
+            return QColor("#4CAF50")
+        if self._hover:
+            return QColor("#80D8FF")
+        return QColor(128, 200, 255, 140)
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
         if event.button() == Qt.MouseButton.LeftButton:
             self._dragging = True
             event.accept()
-            self.update()
+            if self.parent() is not None:
+                self.parent().update()
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802
         if self._dragging and self.parent() is not None:
@@ -87,7 +91,8 @@ class _SplitHandle(QWidget):
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
         self._dragging = False
-        self.update()
+        if self.parent() is not None:
+            self.parent().update()
         event.accept()
 
 
@@ -918,6 +923,12 @@ class PrompterView(QTextEdit):
                                          tw + 16, th + 4, QColor("#1E1E1E"))
                         painter.setPen(QColor("#80D8FF"))
                         painter.drawText(tx, ty, label)
+
+            # 3) 文圖分隔條（貫穿整個 viewport，畫在最上層不被 slide 圖蓋）
+            if self._slide_deck is not None and self._split_handle.isVisible():
+                x = int(vw * self._text_width_ratio)
+                color = self._split_handle.current_color()
+                painter.fillRect(x - 1, 0, 2, vh, color)
         finally:
             painter.end()
 
