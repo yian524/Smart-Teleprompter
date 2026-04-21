@@ -463,23 +463,33 @@ class MainWindow(QMainWindow):
 
         tb.addSeparator()
 
+        # === 播放區（演講進行中最常用，放在檔案區右側）===
         self.act_start = QAction("▶ 開始", self)
         self.act_start.setShortcut(Qt.Key.Key_Space)
+        self.act_start.setToolTip("開始 / 暫停語音辨識（Space）")
         self.act_start.triggered.connect(self._toggle_run)
         tb.addAction(self.act_start)
 
         self.act_reset_pos = QAction("⤴ 回頂", self)
+        self.act_reset_pos.setToolTip("講稿跳回第一句")
         self.act_reset_pos.triggered.connect(self._reset_position)
         tb.addAction(self.act_reset_pos)
 
-        self.act_clear_skipped = QAction("✖ 清除漏講標記", self)
+        self.act_goto_speech = QAction("📍 回念稿位置", self)
+        self.act_goto_speech.setToolTip("把視窗捲回目前辨識的位置（Ctrl+Home）")
+        self.act_goto_speech.setShortcut("Ctrl+Home")
+        self.act_goto_speech.triggered.connect(self._goto_speech_position)
+        tb.addAction(self.act_goto_speech)
+
+        self.act_clear_skipped = QAction("✖ 清漏講", self)
+        self.act_clear_skipped.setToolTip("清除漏講標記（Ctrl+Shift+K）")
         self.act_clear_skipped.setShortcut("Ctrl+Shift+K")
         self.act_clear_skipped.triggered.connect(self._clear_skipped)
         tb.addAction(self.act_clear_skipped)
 
         tb.addSeparator()
 
-        # 字級快速調整
+        # === 字級調整 ===
         self.act_font_smaller = QAction("A−", self)
         self.act_font_smaller.setToolTip("字型縮小 (Ctrl+-)")
         self.act_font_smaller.triggered.connect(
@@ -495,7 +505,6 @@ class MainWindow(QMainWindow):
         self.sb_font_size.setValue(self.cfg.font_size)
         self.sb_font_size.setSuffix(" pt")
         self.sb_font_size.setToolTip("字型大小")
-        self.sb_font_size.setMaximumWidth(80)
         self.sb_font_size.setFixedWidth(80)
         self.sb_font_size.valueChanged.connect(self._on_font_size_spinbox)
         tb.addWidget(self.sb_font_size)
@@ -512,7 +521,7 @@ class MainWindow(QMainWindow):
 
         tb.addSeparator()
 
-        # ⏲ 目標時長：checkbox toggle + 分鐘 spinbox
+        # === 計時區 ===
         self.cb_target = QCheckBox("⏲ 目標時長")
         self.cb_target.setChecked(self.cfg.target_duration_sec > 0)
         self.cb_target.toggled.connect(self._on_target_toggled)
@@ -524,34 +533,23 @@ class MainWindow(QMainWindow):
         self.sb_target_min.setValue(max(1, self.cfg.target_duration_sec // 60 or 15))
         self.sb_target_min.setFixedWidth(80)
         self.sb_target_min.valueChanged.connect(self._on_target_minutes_changed)
-        # 存取 QToolBar 包裝後的 QAction，控制 visibility 才可靠
         self._sb_target_min_action = tb.addWidget(self.sb_target_min)
         self._sb_target_min_action.setVisible(self.cb_target.isChecked())
 
-        # 📍 回到念稿位置
-        self.act_goto_speech = QAction("📍 回到念稿位置", self)
-        self.act_goto_speech.setToolTip("把視窗捲回目前辨識的位置（不中斷念稿）")
-        self.act_goto_speech.setShortcut("Ctrl+Home")
-        self.act_goto_speech.triggered.connect(self._goto_speech_position)
-        tb.addAction(self.act_goto_speech)
-
         self.act_reset_timer = QAction("🔄 重置計時", self)
+        self.act_reset_timer.setToolTip("計時歸零（R）")
         self.act_reset_timer.setShortcut("R")
         self.act_reset_timer.triggered.connect(self.timer_ctrl.reset)
         tb.addAction(self.act_reset_timer)
 
         tb.addSeparator()
 
-        self.act_settings = QAction("⚙ 設定", self)
-        self.act_settings.triggered.connect(self._open_settings)
-        tb.addAction(self.act_settings)
-
-        self.act_fullscreen = QAction("⛶ 全螢幕", self)
-        self.act_fullscreen.setShortcut("F11")
-        self.act_fullscreen.triggered.connect(self._toggle_fullscreen)
-        tb.addAction(self.act_fullscreen)
-
-        tb.addSeparator()
+        # === 模式區 ===
+        self.act_edit_mode = QAction("✏ 編輯模式", self)
+        self.act_edit_mode.setShortcut("Ctrl+E")
+        self.act_edit_mode.setCheckable(True)
+        self.act_edit_mode.toggled.connect(self._toggle_edit_mode)
+        tb.addAction(self.act_edit_mode)
 
         self.act_qa_mode = QAction("🎤 Q&A 模式", self)
         self.act_qa_mode.setShortcut("Ctrl+Q")
@@ -559,7 +557,6 @@ class MainWindow(QMainWindow):
         self.act_qa_mode.triggered.connect(self._toggle_qa_mode)
         tb.addAction(self.act_qa_mode)
 
-        # 演講錄影（MP4 影音檔）
         self.act_record = QAction("⏺ 錄影", self)
         self.act_record.setToolTip("開始 / 停止螢幕錄影 + 麥克風 → MP4")
         self.act_record.setCheckable(True)
@@ -568,12 +565,15 @@ class MainWindow(QMainWindow):
 
         tb.addSeparator()
 
-        # 編輯模式開關（主 toolbar，永遠可見）
-        self.act_edit_mode = QAction("✏ 編輯模式", self)
-        self.act_edit_mode.setShortcut("Ctrl+E")
-        self.act_edit_mode.setCheckable(True)
-        self.act_edit_mode.toggled.connect(self._toggle_edit_mode)
-        tb.addAction(self.act_edit_mode)
+        # === 系統區（最少用，放最右）===
+        self.act_fullscreen = QAction("⛶ 全螢幕", self)
+        self.act_fullscreen.setShortcut("F11")
+        self.act_fullscreen.triggered.connect(self._toggle_fullscreen)
+        tb.addAction(self.act_fullscreen)
+
+        self.act_settings = QAction("⚙ 設定", self)
+        self.act_settings.triggered.connect(self._open_settings)
+        tb.addAction(self.act_settings)
 
         # 第二條工具列：編輯專用（編輯模式開啟才顯示）
         self.edit_toolbar = QToolBar("編輯工具列", self)

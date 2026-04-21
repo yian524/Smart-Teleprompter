@@ -918,7 +918,7 @@ class PrompterView(QTextEdit):
     # 左側文字寬度占比的預設（可由使用者拖拉變更）
     _DEFAULT_TEXT_WIDTH_RATIO = 0.58
     _SLIDE_GAP_LEFT = 16      # 文字和 slide 之間留白
-    _SLIDE_GAP_TOP_BOTTOM = 10  # slide 上下留白
+    _SLIDE_GAP_TOP_BOTTOM = 24  # slide 上下留白（確保垂直置中時有清楚空間）
 
     def set_slide_deck(self, deck) -> None:
         """載入投影片：左側文字限縮寬度，右側空間 paintEvent 畫 slide 圖。"""
