@@ -18,6 +18,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QApplication,
+    QButtonGroup,
     QCheckBox,
     QFileDialog,
     QFrame,
@@ -30,8 +31,10 @@ from PySide6.QtWidgets import (
     QProgressDialog,
     QSpinBox,
     QSplitter,
+    QStackedWidget,
     QStatusBar,
     QToolBar,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -53,6 +56,7 @@ from .qa_panel import QAPanel
 from .record_source_dialog import RecordSourceDialog
 from .session_tab_bar import SessionTabBar
 from .settings_dialog import SettingsDialog
+from .slide_mode_view import SlideModeView
 from .slide_preview import SlidePreviewPanel
 from .slide_viewer_dialog import SlideViewerDialog
 
@@ -296,6 +300,11 @@ class MainWindow(QMainWindow):
             current=config.highlight_color,
             skipped=config.skipped_color,
         )
+
+        self._cfg_font_family = config.font_family
+        self._cfg_font_size = config.font_size
+        self._cfg_line_spacing = config.line_spacing
+        self._cfg_upcoming_color = config.upcoming_color
         # 中央布局：tabs + 時間 bar + 下方 splitter (左提詞 / 中投影片 / 右 Q&A)
         central_wrap = QWidget()
         central_layout = QVBoxLayout(central_wrap)
@@ -314,15 +323,31 @@ class MainWindow(QMainWindow):
         self.time_panel = TimePanel(central_wrap)
         central_layout.addWidget(self.time_panel)
 
-        # 巢狀 splitter：外=[內層 + Q&A]，內=[提詞 + 投影片預覽]
+        # 巢狀 splitter：外=[內層 + Q&A]，內=[縮圖列(左) + 主內容區(中)]
         self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
         self.content_splitter = QSplitter(Qt.Orientation.Horizontal)
-        self.content_splitter.addWidget(self.view)
 
-        # 投影片改為嵌入 PrompterView 內部（右欄 + 全寬 hr），不需獨立面板
+        # 左側縮圖列（只在投影片模式顯示）— 重用 SlidePreviewPanel
         self.slide_preview = SlidePreviewPanel()
         self.slide_preview.hide()
-        self.content_splitter.setStretchFactor(0, 1)
+        self.content_splitter.addWidget(self.slide_preview)
+
+        # 中間：QStackedWidget 裝兩種顯示方式
+        #   index 0 = PrompterView（滾動式：講稿 / 分割模式）
+        #   index 1 = SlideModeView（單頁式：投影片模式）
+        self._content_stack = QStackedWidget()
+        self._content_stack.addWidget(self.view)
+        self.slide_mode_view = SlideModeView()
+        self.slide_mode_view.set_font_family(self._cfg_font_family)
+        self.slide_mode_view.set_font_size(self._cfg_font_size)
+        self.slide_mode_view.set_line_spacing(self._cfg_line_spacing)
+        self.slide_mode_view.set_colors(upcoming=self._cfg_upcoming_color)
+        self._content_stack.addWidget(self.slide_mode_view)
+        self._content_stack.setCurrentIndex(0)  # 預設顯示 PrompterView
+        self.content_splitter.addWidget(self._content_stack)
+
+        self.content_splitter.setStretchFactor(0, 0)  # 縮圖列固定寬度
+        self.content_splitter.setStretchFactor(1, 1)  # 主內容區拉伸
 
         self.main_splitter.addWidget(self.content_splitter)
         self.qa_panel = QAPanel()
@@ -372,6 +397,53 @@ class MainWindow(QMainWindow):
         sb.addPermanentWidget(QLabel("麥克風"))
         sb.addPermanentWidget(self.mic_level)
 
+        # === 右下角檢視模式切換（Word 風格：📄 ⊞ 🖼）===
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.VLine)
+        sep.setStyleSheet("color: #3A3A3A;")
+        sb.addPermanentWidget(sep)
+
+        self._view_mode_group = QButtonGroup(self)
+        self._view_mode_group.setExclusive(True)
+        self.btn_mode_transcript = QToolButton()
+        self.btn_mode_transcript.setText("📄")
+        self.btn_mode_transcript.setToolTip("講稿模式：文字滿版 (Ctrl+1)")
+        self.btn_mode_transcript.setCheckable(True)
+        self.btn_mode_transcript.clicked.connect(lambda: self._set_view_mode("transcript"))
+        self.btn_mode_split = QToolButton()
+        self.btn_mode_split.setText("⊞")
+        self.btn_mode_split.setToolTip("分割模式：文左圖右 (Ctrl+2)")
+        self.btn_mode_split.setCheckable(True)
+        self.btn_mode_split.setChecked(True)   # 預設
+        self.btn_mode_split.clicked.connect(lambda: self._set_view_mode("split"))
+        self.btn_mode_slide = QToolButton()
+        self.btn_mode_slide.setText("🖼")
+        self.btn_mode_slide.setToolTip("投影片模式：加左側縮圖列，左右鍵逐頁切換 (Ctrl+3)")
+        self.btn_mode_slide.setCheckable(True)
+        self.btn_mode_slide.clicked.connect(lambda: self._set_view_mode("slide"))
+        for b in (self.btn_mode_transcript, self.btn_mode_split, self.btn_mode_slide):
+            self._view_mode_group.addButton(b)
+            b.setStyleSheet(
+                "QToolButton { font-size: 14px; padding: 2px 8px; border: none; }"
+                "QToolButton:checked { background: #4CAF50; color: white; border-radius: 3px; }"
+                "QToolButton:hover { background: #3A3A3A; }"
+            )
+            sb.addPermanentWidget(b)
+
+        # 版面對調按鈕（⇆ / ⇅）：一鍵把文字/投影片左右或上下互換
+        self.btn_swap_layout = QToolButton()
+        self.btn_swap_layout.setText("⇆")
+        self.btn_swap_layout.setToolTip("對調文字與投影片位置 (橫屏左右互換、直屏上下互換)")
+        self.btn_swap_layout.setStyleSheet(
+            "QToolButton { font-size: 14px; padding: 2px 8px; border: none; color: #CCCCCC; }"
+            "QToolButton:hover { background: #3A3A3A; border-radius: 3px; }"
+        )
+        self.btn_swap_layout.clicked.connect(self._toggle_layout_swap)
+        sb.addPermanentWidget(self.btn_swap_layout)
+
+        self._view_mode: str = "split"
+        self._layout_swapped: bool = False
+
         self.setStatusBar(sb)
 
         # ---- 工具列 ----
@@ -395,6 +467,12 @@ class MainWindow(QMainWindow):
         self.timer_ctrl.set_progress_callback(self._script_progress)
 
         self.view.position_clicked.connect(self._on_view_clicked)
+        # 投影片模式下的方向鍵由 SlideModeView 發出
+        self.slide_mode_view.page_navigate_requested.connect(self._navigate_page)
+        # 左側縮圖列：點縮圖跳頁、方向鍵逐頁、收合按鈕
+        self.slide_preview.page_requested.connect(self._on_slide_page_requested)
+        self.slide_preview.page_navigate_requested.connect(self._navigate_page)
+        self.slide_preview.collapse_requested.connect(self._on_thumbnail_collapse)
         self.view.slide_double_clicked.connect(self._open_slide_viewer)
         self.view.font_size_changed.connect(self._sync_font_spinbox)
         # 滾動時更新右上角頁碼顯示（以 viewport 為準）
@@ -433,12 +511,17 @@ class MainWindow(QMainWindow):
 
         # 啟動後載入 sessions.json（延遲一下讓 UI 先渲染完）
         QTimer.singleShot(50, self._restore_sessions_or_bootstrap)
+        # 啟動時依視窗大小套一次自適應版面
+        QTimer.singleShot(0, self._apply_orientation_layout)
 
     # ---------- 介面建立 ----------
 
     def _build_toolbar(self) -> None:
         tb = QToolBar("主工具列")
         tb.setMovable(False)
+        # 溢出按鈕（>>）的 hint：確保直屏 / 窄視窗時使用者看得到「還有更多按鈕」
+        tb.setContextMenuPolicy(Qt.ContextMenuPolicy.PreventContextMenu)
+        self._main_toolbar = tb
         self.addToolBar(tb)
 
         self.act_open = QAction("📂 開啟講稿", self)
@@ -575,6 +658,29 @@ class MainWindow(QMainWindow):
         self.act_settings.triggered.connect(self._open_settings)
         tb.addAction(self.act_settings)
 
+        # === 主工具列延伸（row 2）：直屏時顯示，把 secondary 群組移到這裡 ===
+        self._main_toolbar_row2 = QToolBar("主工具列延伸", self)
+        self._main_toolbar_row2.setMovable(False)
+        self.addToolBarBreak()
+        self.addToolBar(self._main_toolbar_row2)
+        self._main_toolbar_row2.setVisible(False)
+
+        # 記錄 primary vs secondary 分界（用 act_clear_skipped 後的第一個 separator）
+        all_acts = list(tb.actions())
+        try:
+            clear_idx = all_acts.index(self.act_clear_skipped)
+            # primary = 到 clear_skipped 後面第一個 separator（含 sep）
+            split = clear_idx + 1
+            while split < len(all_acts) and not all_acts[split].isSeparator():
+                split += 1
+            if split < len(all_acts):
+                split += 1   # 包含 separator 本身
+            self._toolbar_primary_acts = all_acts[:split]
+            self._toolbar_secondary_acts = all_acts[split:]
+        except ValueError:
+            self._toolbar_primary_acts = all_acts
+            self._toolbar_secondary_acts = []
+
         # 第二條工具列：編輯專用（編輯模式開啟才顯示）
         self.edit_toolbar = QToolBar("編輯工具列", self)
         self.edit_toolbar.setMovable(False)
@@ -652,6 +758,10 @@ class MainWindow(QMainWindow):
         # 新分頁
         QShortcut(QKeySequence("Ctrl+T"), self, activated=self._new_tab)
         QShortcut(QKeySequence("Ctrl+W"), self, activated=self._close_current_tab_shortcut)
+        # 檢視模式切換（Word 風格）
+        QShortcut(QKeySequence("Ctrl+1"), self, activated=lambda: self._set_view_mode("transcript"))
+        QShortcut(QKeySequence("Ctrl+2"), self, activated=lambda: self._set_view_mode("split"))
+        QShortcut(QKeySequence("Ctrl+3"), self, activated=lambda: self._set_view_mode("slide"))
         # 上次手動標漏講的起點（呼叫一次後更新）
         self._last_manual_mark_pos: int = 0
 
@@ -749,6 +859,11 @@ class MainWindow(QMainWindow):
             session.format_spans = self.view.dump_format_spans()
         except Exception:
             session.format_spans = []
+        # 檢視模式 + 縮圖列寬度
+        session.view_mode = getattr(self, "_view_mode", "split")
+        sizes = self.content_splitter.sizes()
+        if self.slide_preview.isVisible() and len(sizes) >= 2 and sizes[0] > 0:
+            session.thumbnail_panel_width = sizes[0]
 
     def _bind_session_runtime(self, session: Session) -> None:
         """把 session 的 transcript/engine/slide_deck 套到 UI。"""
@@ -789,6 +904,9 @@ class MainWindow(QMainWindow):
         self.view.set_slide_deck(session.slide_deck)
         if session.slide_deck is not None:
             self._sync_slide_to_current_sentence()
+
+        # 還原檢視模式（放最後，因為 _set_view_mode 會根據 session.slide_deck 決定縮圖列內容）
+        self._set_view_mode(session.view_mode or "split")
 
     def _restore_sessions_or_bootstrap(self) -> None:
         """啟動時嘗試從 sessions.json 還原；否則 bootstrap 一個空 session，
@@ -1207,12 +1325,13 @@ class MainWindow(QMainWindow):
         if self.transcript is None or not self.transcript.pages:
             return
         if page_no < 1 or page_no > len(self.transcript.pages):
-            # 超出講稿頁數（投影片比講稿多），只顯示投影片即可，不動講稿
             return
         page = self.transcript.pages[page_no - 1]
-        # page.sentence_start 是 1-based？不，Transcript.pages 的 sentence_start 是 0-based index
         result = self.engine.jump_to_sentence(page.sentence_start)
         self.view.set_position(result.global_char_pos, animate=False)
+        # 投影片模式：同步 SlideModeView 到新頁
+        if self._view_mode == "slide":
+            self.slide_mode_view.set_current_page(page_no - 1)
 
     def _sync_slide_to_current_sentence(self) -> None:
         """講稿目前句 → 對應 PDF 頁 → 切換右側大圖。"""
@@ -1260,6 +1379,9 @@ class MainWindow(QMainWindow):
         self.view.set_text(transcript.full_text)
         self.view.set_position(transcript.sentences[0].start, animate=False)
         self.view.clear_skipped()
+        # 同步 SlideModeView（若目前在投影片模式，立即可見新文稿）
+        self.slide_mode_view.set_transcript(transcript)
+        self.slide_mode_view.set_current_page(0)
         # 更新 initial_prompt
         prompt = transcript.full_text[:200]
         self.recognizer.update_prompt(prompt)
@@ -1574,6 +1696,202 @@ class MainWindow(QMainWindow):
             self.showNormal()
         else:
             self.showFullScreen()
+
+    def _apply_orientation_layout(self) -> None:
+        """依視窗寬高比調整 UI：直屏時縮短 mic bar + 主工具列拆成兩欄常駐。"""
+        is_portrait = self.width() < self.height()
+        if hasattr(self, "mic_level"):
+            self.mic_level.setFixedWidth(60 if is_portrait else 120)
+        self._layout_main_toolbar(is_portrait)
+
+    def _layout_main_toolbar(self, is_portrait: bool) -> None:
+        """主工具列：landscape 全部在 row 1；portrait 拆成兩欄常駐顯示。"""
+        if not hasattr(self, "_main_toolbar_row2"):
+            return
+        tb1 = self._main_toolbar
+        tb2 = self._main_toolbar_row2
+        primary = getattr(self, "_toolbar_primary_acts", None)
+        secondary = getattr(self, "_toolbar_secondary_acts", None)
+        if primary is None or secondary is None:
+            return
+        # 決定 secondary 應該在哪一條 toolbar
+        target = tb2 if is_portrait else tb1
+        current = tb1 if is_portrait else tb2
+        if not secondary:
+            tb2.setVisible(False)
+            return
+        # 檢查第一個 secondary action 現在是否已在 target — 已對齊就不用動
+        if secondary[0] in target.actions():
+            tb2.setVisible(is_portrait)
+            return
+        # 把 secondary 從 current 移到 target（保持順序）
+        for a in secondary:
+            if a in current.actions():
+                current.removeAction(a)
+            target.addAction(a)
+        tb2.setVisible(is_portrait)
+
+    def _toggle_layout_swap(self) -> None:
+        """對調文字/投影片位置（SlideModeView 支援；記到 session）。"""
+        self._layout_swapped = not self._layout_swapped
+        self.slide_mode_view.set_layout_swapped(self._layout_swapped)
+        # 按鈕顯示當前狀態（⇆ / ⇄）
+        self.btn_swap_layout.setText("⇄" if self._layout_swapped else "⇆")
+        active = self.session_manager.active
+        if active is not None:
+            active.layout_swapped = self._layout_swapped
+
+    def _set_view_mode(self, mode: str) -> None:
+        """切換檢視模式：transcript | split | slide。
+
+        transcript：文字滿版（隱藏投影片欄 + 縮圖列）
+        split     ：文左圖右（現在預設；無縮圖列）
+        slide     ：文左圖右 + 左側 PDF-style 縮圖列，左右方向鍵逐頁切換
+        """
+        if mode not in ("transcript", "split", "slide"):
+            return
+        self._view_mode = mode
+        active = self.session_manager.active
+        deck = active.slide_deck if active is not None else None
+
+        # 同步按鈕選中狀態（blockSignals 避免 clicked 再觸發 _set_view_mode）
+        for btn, m in (
+            (self.btn_mode_transcript, "transcript"),
+            (self.btn_mode_split, "split"),
+            (self.btn_mode_slide, "slide"),
+        ):
+            btn.blockSignals(True)
+            btn.setChecked(m == mode)
+            btn.blockSignals(False)
+
+        if mode == "transcript":
+            # PrompterView：文字滿版，無投影片
+            self._content_stack.setCurrentIndex(0)
+            self.view.set_slide_deck(None)
+            self.slide_preview.hide()
+        elif mode == "split":
+            # PrompterView：文左嵌入式圖右（預設）
+            self._content_stack.setCurrentIndex(0)
+            self.view.set_slide_deck(deck)
+            self.slide_preview.hide()
+        elif mode == "slide":
+            # SlideModeView：單頁獨立版面
+            self.slide_mode_view.set_transcript(self.transcript)
+            self.slide_mode_view.set_slide_deck(deck)
+            try:
+                self.slide_mode_view.set_format_spans(self.view.dump_format_spans())
+            except Exception:
+                pass
+            self.slide_mode_view.set_current_page(self._current_page_idx())
+            # 還原版面對調狀態
+            swap = active.layout_swapped if active is not None else False
+            self._layout_swapped = swap
+            self.slide_mode_view.set_layout_swapped(swap)
+            if hasattr(self, "btn_swap_layout"):
+                self.btn_swap_layout.setText("⇄" if swap else "⇆")
+            self._content_stack.setCurrentIndex(1)
+            self.slide_mode_view.setFocus()
+            # 左側縮圖列
+            if deck is not None:
+                title = (
+                    Path(active.slides_path).name
+                    if active and active.slides_path
+                    else "投影片"
+                )
+                self.slide_preview.set_deck(deck, title=title)
+                self.slide_preview.show()
+                self.slide_preview.scroll_to_page(self._current_page_idx() + 1)
+                width = active.thumbnail_panel_width if active is not None else 200
+                self._set_thumbnail_width(width)
+            else:
+                self.slide_preview.hide()
+                self.status_recognized.setText(
+                    "投影片模式（未載入投影片：左右鍵仍可跳頁）"
+                )
+
+        # 持久化到 active session
+        if active is not None:
+            active.view_mode = mode
+
+    def _set_thumbnail_width(self, width: int) -> None:
+        """設定縮圖列在 content_splitter 的寬度。width=0 表示收合。"""
+        sizes = self.content_splitter.sizes()
+        if len(sizes) < 2:
+            return
+        total = sum(sizes)
+        new_thumb = max(0, min(total - 200, width))
+        self.content_splitter.setSizes([new_thumb, total - new_thumb])
+
+    def _on_thumbnail_collapse(self, collapse: bool) -> None:
+        """收合 / 展開縮圖列。收合時顯示一個浮動 ▶ 按鈕可再展開。"""
+        active = self.session_manager.active
+        if collapse:
+            # 記住目前寬度，收合 → 隱藏整個面板
+            if active is not None:
+                sizes = self.content_splitter.sizes()
+                if len(sizes) >= 2 and sizes[0] > 0:
+                    active.thumbnail_panel_width = sizes[0]
+            self.slide_preview.hide()
+            self._show_thumbnail_expand_btn()
+        else:
+            # 展開 → 還原寬度
+            self.slide_preview.show()
+            width = active.thumbnail_panel_width if active is not None else 200
+            self._set_thumbnail_width(max(180, width))
+            self._hide_thumbnail_expand_btn()
+
+    def _show_thumbnail_expand_btn(self) -> None:
+        """在 content_splitter 左側顯示一個小按鈕讓使用者重新展開縮圖列。"""
+        if not hasattr(self, "_btn_expand_thumb"):
+            self._btn_expand_thumb = QToolButton(self.content_splitter)
+            self._btn_expand_thumb.setText("▶")
+            self._btn_expand_thumb.setToolTip("展開縮圖列")
+            self._btn_expand_thumb.setStyleSheet(
+                "QToolButton { background: #4CAF50; color: white; "
+                "font-size: 13px; padding: 4px 2px; border: none; "
+                "border-top-right-radius: 6px; border-bottom-right-radius: 6px; }"
+                "QToolButton:hover { background: #66BB6A; }"
+            )
+            self._btn_expand_thumb.setFixedSize(20, 40)
+            self._btn_expand_thumb.clicked.connect(
+                lambda: self._on_thumbnail_collapse(False)
+            )
+        self._btn_expand_thumb.move(0, self.content_splitter.height() // 2 - 20)
+        self._btn_expand_thumb.show()
+        self._btn_expand_thumb.raise_()
+
+    def _hide_thumbnail_expand_btn(self) -> None:
+        if hasattr(self, "_btn_expand_thumb"):
+            self._btn_expand_thumb.hide()
+
+    def _current_page_idx(self) -> int:
+        """回傳目前 engine.current_sentence_index 所在頁的 index（0-based）。"""
+        if self.transcript is None or not self.transcript.pages:
+            return 0
+        cur_sent = self.engine.current_sentence_index
+        for i, page in enumerate(self.transcript.pages):
+            if page.sentence_start <= cur_sent < page.sentence_end:
+                return i
+        return len(self.transcript.pages) - 1
+
+    def _navigate_page(self, delta: int) -> None:
+        """投影片模式左右方向鍵：跳到上/下一頁，所有元件同步更新。"""
+        if self.transcript is None or not self.transcript.pages:
+            return
+        cur_page_idx = self._current_page_idx()
+        new_idx = max(0, min(len(self.transcript.pages) - 1, cur_page_idx + delta))
+        if new_idx == cur_page_idx:
+            return
+        page = self.transcript.pages[new_idx]
+        # engine 同步（保留對齊狀態，切回 split 模式也會在正確位置）
+        result = self.engine.jump_to_sentence(page.sentence_start)
+        self.view.set_position(result.global_char_pos, animate=False)
+        # 投影片模式下：更新 SlideModeView 顯示新頁
+        if self._view_mode == "slide":
+            self.slide_mode_view.set_current_page(new_idx)
+        # 縮圖列同步
+        if self.slide_deck is not None and 1 <= page.number <= self.slide_deck.page_count:
+            self.slide_preview.scroll_to_page(page.number)
 
     def _toggle_qa_mode(self) -> None:
         """切換 Q&A 模式：右側顯示/隱藏 QA 面板。"""
@@ -1963,6 +2281,8 @@ class MainWindow(QMainWindow):
         # 遮罩跟著 view 同大小
         if hasattr(self, "loading_overlay") and self.loading_overlay.isVisible():
             self.loading_overlay.resize(self.view.size())
+        # 直屏/橫屏自適應
+        self._apply_orientation_layout()
 
     # ---------- 拖拉檔案支援 ----------
 

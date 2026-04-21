@@ -47,6 +47,12 @@ class Session:
     modified_text: str = ""
     # 編輯結果尚未存回 .txt 檔
     dirty: bool = False
+    # 檢視模式："transcript" | "split" | "slide"；預設分割（文左圖右）
+    view_mode: str = "split"
+    # 投影片模式下左側縮圖列寬度（0 = 收合）
+    thumbnail_panel_width: int = 200
+    # 版面對調（橫屏左右互換 / 直屏上下互換）
+    layout_swapped: bool = False
 
     # runtime（不持久化）
     transcript: Optional[Transcript] = field(default=None, compare=False, repr=False)
@@ -66,6 +72,9 @@ class Session:
             "format_spans": [s.to_dict() for s in self.format_spans],
             "modified_text": self.modified_text,
             "dirty": self.dirty,
+            "view_mode": self.view_mode,
+            "thumbnail_panel_width": self.thumbnail_panel_width,
+            "layout_swapped": self.layout_swapped,
         }
 
     @classmethod
@@ -83,6 +92,9 @@ class Session:
             format_spans=spans,
             modified_text=data.get("modified_text", ""),
             dirty=bool(data.get("dirty", False)),
+            view_mode=data.get("view_mode", "split"),
+            thumbnail_panel_width=int(data.get("thumbnail_panel_width", 200)),
+            layout_swapped=bool(data.get("layout_swapped", False)),
         )
 
 

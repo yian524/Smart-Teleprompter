@@ -25,13 +25,14 @@ from __future__ import annotations
 from typing import Optional
 
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QKeyEvent, QPixmap
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
     QScrollArea,
     QSizePolicy,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -43,7 +44,9 @@ class SlidePreviewPanel(QWidget):
     """投影片預覽面板（所有頁垂直列出，可捲動）。"""
 
     page_changed = Signal(int)  # 使用者捲動導致目前可見頁變更（1-based）
-    page_requested = Signal(int)  # 向下相容（舊介面；目前實作同 page_changed）
+    page_requested = Signal(int)  # 點縮圖要求跳到某頁（由 MainWindow 接）
+    page_navigate_requested = Signal(int)  # 左右方向鍵 → ±1（聚焦在縮圖列時發）
+    collapse_requested = Signal(bool)       # True=收合、False=展開
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -72,7 +75,7 @@ class SlidePreviewPanel(QWidget):
             "background-color: #252525; border-bottom: 1px solid #3A3A3A;"
         )
         tb_layout = QHBoxLayout(top_bar)
-        tb_layout.setContentsMargins(12, 4, 12, 4)
+        tb_layout.setContentsMargins(8, 4, 8, 4)
         self.title_label = QLabel("尚未載入投影片")
         self.title_label.setStyleSheet("color: #80D8FF; font-size: 13px;")
         tb_layout.addWidget(self.title_label)
@@ -80,7 +83,19 @@ class SlidePreviewPanel(QWidget):
         self.page_label = QLabel("—")
         self.page_label.setStyleSheet("color: #CCCCCC; font-size: 13px;")
         tb_layout.addWidget(self.page_label)
+        # 收合按鈕（◀）：收合後 MainWindow 把 panel 寬度設為 0
+        self.btn_collapse = QToolButton()
+        self.btn_collapse.setText("◀")
+        self.btn_collapse.setToolTip("收合縮圖列")
+        self.btn_collapse.setStyleSheet(
+            "QToolButton { color: #80D8FF; font-size: 14px; border: none; padding: 2px 6px; }"
+            "QToolButton:hover { background: #3A3A3A; border-radius: 3px; }"
+        )
+        self.btn_collapse.clicked.connect(lambda: self.collapse_requested.emit(True))
+        tb_layout.addWidget(self.btn_collapse)
         outer.addWidget(top_bar)
+        # 允許鍵盤 focus 讓左右方向鍵被 keyPressEvent 收到
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
         # 捲動區（視覺捲軸隱藏，只保留內部滾動功能讓滑鼠滾輪依舊可用）
         self.scroll = QScrollArea()
@@ -97,8 +112,8 @@ class SlidePreviewPanel(QWidget):
         # 內層容器
         self.container = QWidget()
         self.col = QVBoxLayout(self.container)
-        self.col.setContentsMargins(18, 18, 18, 18)
-        self.col.setSpacing(18)
+        self.col.setContentsMargins(8, 8, 8, 8)
+        self.col.setSpacing(10)
         self.container.setStyleSheet("background-color: #2A2A2A;")
         self.scroll.setWidget(self.container)
 
@@ -144,45 +159,39 @@ class SlidePreviewPanel(QWidget):
         self.title_label.setText(title or "投影片")
         self.page_label.setText(f"1 / {deck.page_count}")
 
-        target_width = max(300, self.scroll.viewport().width() - 40)
+        target_width = max(80, self.scroll.viewport().width() - 40)
         for i, page in enumerate(deck.pages, start=1):
-            # 每頁上方 hr + 標籤「── 第 N / M 頁 ──」
-            header = QLabel(f"────────  第 {i} / {deck.page_count} 頁  ────────")
+            # 每頁上方小標籤「第 N 頁」
+            header = QLabel(f"第 {i} 頁")
             header.setAlignment(Qt.AlignmentFlag.AlignCenter)
             header.setStyleSheet(
-                "color: #80D8FF; font-size: 12px; font-weight: 600;"
-                " padding: 8px 0; letter-spacing: 2px;"
-                " border-top: 2px solid #3A3A3A; border-bottom: 2px solid #3A3A3A;"
-                " margin: 12px 0 6px 0;"
+                "color: #80D8FF; font-size: 11px; font-weight: 600;"
+                " padding: 2px 0; margin: 4px 0 2px 0;"
             )
-            self.col.addWidget(header)
+            self.col.addWidget(header, 0, Qt.AlignmentFlag.AlignHCenter)
             self._page_headers.append(header)
 
             img = QLabel("載入中…")
             img.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            img.setSizePolicy(QSizePolicy.Policy.Expanding,
-                              QSizePolicy.Policy.Preferred)
+            img.setSizePolicy(QSizePolicy.Policy.Fixed,
+                              QSizePolicy.Policy.Fixed)
             img.setStyleSheet(
-                "background-color: #1A1A1A; border: 1px solid #3A3A3A;"
-                " border-radius: 6px; padding: 6px; color: #555;"
+                "background-color: transparent; border: 1px solid #3A3A3A;"
+                " border-radius: 4px; color: #555;"
+            )
+            img.setCursor(Qt.CursorShape.PointingHandCursor)
+            # 點擊縮圖 → 跳到該頁（page_requested signal）
+            img.mousePressEvent = (  # type: ignore[method-assign]
+                lambda ev, pn=i: self._on_thumbnail_clicked(pn)
             )
             # 依 PDF 原始寬高比預留空間，避免 scroll 過程中尺寸跳動
             if page.width_pt > 0:
                 aspect = page.height_pt / page.width_pt
             else:
                 aspect = 1.414  # A4 fallback
-            img.setMinimumHeight(int(target_width * aspect) + 12)
-            self.col.addWidget(img)
+            img.setFixedSize(target_width, int(target_width * aspect))
+            self.col.addWidget(img, 0, Qt.AlignmentFlag.AlignHCenter)
             self._page_images.append(img)
-
-            # 每頁下方一條細 hr 線（與本頁結束、下頁 header 之間的視覺分隔）
-            bottom_line = QFrame()
-            bottom_line.setFrameShape(QFrame.Shape.HLine)
-            bottom_line.setStyleSheet(
-                "QFrame { color: #3A3A3A; background-color: #3A3A3A;"
-                " max-height: 1px; margin: 6px 0 0 0; }"
-            )
-            self.col.addWidget(bottom_line)
 
             # 每頁下方 spacer（對齊填補用，目前保留接口）
             spacer = QWidget()
@@ -197,6 +206,48 @@ class SlidePreviewPanel(QWidget):
         self._current_page = 1
         # 首批渲染（視窗內 + 前兩頁緩衝）
         QTimer.singleShot(30, self._render_visible_pages)
+
+    def _on_thumbnail_clicked(self, page_no: int) -> None:
+        """縮圖被點 → 發 page_requested 訊號 + 搶 focus 讓方向鍵能生效。"""
+        if self._deck is None or not (1 <= page_no <= self._deck.page_count):
+            return
+        self._current_page = page_no
+        self.page_label.setText(f"{page_no} / {self._deck.page_count}")
+        self._highlight_active_thumbnail()
+        self.setFocus()   # 讓後續方向鍵能被這個 panel 收到
+        self.page_requested.emit(page_no)
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        """面板聚焦時左右方向鍵 → 發 page_navigate_requested(±1)。"""
+        if event.modifiers() == Qt.KeyboardModifier.NoModifier:
+            if event.key() == Qt.Key.Key_Left:
+                self.page_navigate_requested.emit(-1)
+                event.accept()
+                return
+            if event.key() == Qt.Key.Key_Right:
+                self.page_navigate_requested.emit(+1)
+                event.accept()
+                return
+        super().keyPressEvent(event)
+
+    def mousePressEvent(self, event) -> None:
+        # 點在面板空白處也能搶 focus
+        self.setFocus()
+        super().mousePressEvent(event)
+
+    def _highlight_active_thumbnail(self) -> None:
+        """把 self._current_page 對應的縮圖加亮框，其他的恢復普通框。"""
+        for i, img in enumerate(self._page_images, start=1):
+            if i == self._current_page:
+                img.setStyleSheet(
+                    "background-color: transparent; border: 2px solid #4CAF50;"
+                    " border-radius: 4px; color: #555;"
+                )
+            else:
+                img.setStyleSheet(
+                    "background-color: transparent; border: 1px solid #3A3A3A;"
+                    " border-radius: 4px; color: #555;"
+                )
 
     def scroll_to_page(self, page_no: int) -> None:
         """把指定頁的 header 捲到視窗頂端（由 MainWindow 從左側講稿同步觸發）。"""
@@ -213,6 +264,7 @@ class SlidePreviewPanel(QWidget):
         self.scroll.verticalScrollBar().setValue(max(0, y - 10))
         self._current_page = page_no
         self.page_label.setText(f"{page_no} / {self._deck.page_count}")
+        self._highlight_active_thumbnail()
         self._reset_guard_timer.start(120)
         # 確保目標頁已渲染
         self._render_visible_pages()
@@ -288,7 +340,7 @@ class SlidePreviewPanel(QWidget):
         """只渲染目前視窗內（加 400px 緩衝）的頁面，加速載入與捲動。"""
         if self._deck is None or not self._page_images:
             return
-        target_w = max(300, self.scroll.viewport().width() - 40)
+        target_w = max(80, self.scroll.viewport().width() - 40)
         sb = self.scroll.verticalScrollBar()
         top = sb.value()
         bottom = top + self.scroll.viewport().height()
@@ -307,7 +359,7 @@ class SlidePreviewPanel(QWidget):
             if pix is not None:
                 img.setText("")
                 img.setPixmap(pix)
-                img.setMinimumHeight(pix.height() + 12)
+                img.setFixedSize(pix.size())   # label 緊貼 pixmap，無黑邊
                 self._rendered_widths[i + 1] = target_w
 
     def _clear_guard(self) -> None:
@@ -327,14 +379,14 @@ class SlidePreviewPanel(QWidget):
     def _on_resize_done(self) -> None:
         """寬度改變完畢 → 清掉舊渲染標記，lazy 重新渲染視窗內頁面。"""
         self._rendered_widths.clear()
-        # 先用新尺寸修佔位高度（避免 scroll 位置錯亂）
+        # 先用新尺寸修佔位尺寸（避免 scroll 位置錯亂）
         if self._deck is not None:
-            target_w = max(300, self.scroll.viewport().width() - 40)
+            target_w = max(80, self.scroll.viewport().width() - 20)
             for i, img in enumerate(self._page_images):
                 page = self._deck.pages[i]
                 if page.width_pt > 0:
                     aspect = page.height_pt / page.width_pt
                 else:
                     aspect = 1.414
-                img.setMinimumHeight(int(target_w * aspect) + 12)
+                img.setFixedSize(target_w, int(target_w * aspect))
         self._render_visible_pages()

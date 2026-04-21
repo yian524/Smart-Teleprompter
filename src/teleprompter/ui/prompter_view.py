@@ -804,7 +804,8 @@ class PrompterView(QTextEdit):
         if self._slide_deck is not None:
             self._relayout_slide_gaps()
 
-        # 還原選取
+        # 還原選取（保留 scroll 位置，避免 setTextCursor 內部 ensureCursorVisible
+        # 把視窗拉回游標位置 — 使用者會感覺「滑不下去」）
         new_cur = self.textCursor()
         new_cur.setPosition(min(anchor, self._doc_length))
         if had_selection:
@@ -812,7 +813,10 @@ class PrompterView(QTextEdit):
                 min(position, self._doc_length),
                 QTextCursor.MoveMode.KeepAnchor,
             )
+        sb = self.verticalScrollBar()
+        saved_scroll = sb.value()
         self.setTextCursor(new_cur)
+        sb.setValue(saved_scroll)
         self.viewport().update()
 
     # ---------- 水平分隔線繪製 ----------
@@ -825,7 +829,7 @@ class PrompterView(QTextEdit):
             vw = self.viewport().width()
             vh = self.viewport().height()
 
-            # 1) 畫 slide 圖（垂直置中於每頁 top~bottom 區間）
+            # 1) 畫 slide 圖（置中於每頁範圍）
             if self._slide_deck is not None and self._page_boundaries:
                 for k, (top_y_doc, bottom_y_doc) in enumerate(self._page_boundaries):
                     page_no = k + 1
@@ -833,7 +837,6 @@ class PrompterView(QTextEdit):
                     if rect is None:
                         continue
                     slide_x, _, slide_w, slide_h = rect
-                    # 垂直置中
                     page_h = bottom_y_doc - top_y_doc
                     draw_y_doc = top_y_doc + max(0, (page_h - slide_h) // 2)
                     vy = draw_y_doc - sb_value
@@ -951,14 +954,19 @@ class PrompterView(QTextEdit):
         self.viewport().update()
 
     def _apply_text_wrap_width(self) -> None:
-        """把文字 wrap 寬度設為 viewport 的 58%（若有 slide）或全寬（無 slide）。"""
-        if self._slide_deck is None:
+        """把文字 wrap 寬度設為 viewport 的 58%（若有 slide）或全寬（無 slide）。
+        直屏（viewport 寬 < 高）時：放棄嵌入式右欄投影片，文字用全寬；使用者改用投影片模式看 slide。
+        """
+        vw = self.viewport().width()
+        vh = self.viewport().height()
+        is_portrait = vw < vh
+        if self._slide_deck is None or is_portrait:
             self.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
             return
         self.setLineWrapMode(QTextEdit.LineWrapMode.FixedPixelWidth)
-        w = max(200, int(self.viewport().width() * self._text_width_ratio))
+        w = max(200, int(vw * self._text_width_ratio))
         self.setLineWrapColumnOrWidth(w)
-        self._split_line_x = int(self.viewport().width() * self._text_width_ratio)
+        self._split_line_x = int(vw * self._text_width_ratio)
 
     def _split_line_hit_range(self) -> tuple[int, int]:
         """返回分隔線可點擊的 x 範圍（左右各 6px 容錯）。"""
@@ -1052,14 +1060,22 @@ class PrompterView(QTextEdit):
         if self._slide_deck is None or page_no < 1 or page_no > self._slide_deck.page_count:
             return None
         vw = self.viewport().width()
+        vh = self.viewport().height()
+        # 直屏：不畫嵌入式 slide（讓文字佔全寬；使用者改用投影片模式看 slide）
+        if vw < vh:
+            return None
         text_w = int(vw * self._text_width_ratio)
-        slide_w = vw - text_w - self._SLIDE_GAP_LEFT - 20
-        if slide_w < 120:
+        # 右欄可用寬度：[text_w, vw]；左右對稱留 24px
+        pad = 24
+        right_area_w = vw - text_w - pad * 2
+        if right_area_w < 120:
             return None
         page = self._slide_deck.pages[page_no - 1]
         aspect = page.height_pt / page.width_pt if page.width_pt > 0 else 1.414
-        slide_h = int(slide_w * aspect)
-        return (text_w + self._SLIDE_GAP_LEFT, 0, slide_w, slide_h)
+        slide_h = int(right_area_w * aspect)
+        # 水平置中於右欄
+        slide_x = text_w + pad
+        return (slide_x, 0, right_area_w, slide_h)
 
     def _page_top_block(self, page_index_0based: int):
         """回傳第 k 頁（0-based）的第一個 block；依 _hr_blocks 推算。
@@ -1236,14 +1252,15 @@ class PrompterView(QTextEdit):
         cursor.setBlockFormat(bf)
 
     def clear_all_block_bottom_paddings(self) -> None:
-        """清掉所有 block 的 bottomMargin（避免殘留）。"""
+        """清掉所有 block 的 top/bottomMargin（避免殘留）。"""
         doc = self.document()
         block = doc.firstBlock()
         while block.isValid():
             cursor = QTextCursor(block)
             bf = cursor.blockFormat()
-            if bf.bottomMargin() > 0:
+            if bf.bottomMargin() > 0 or bf.topMargin() > 0:
                 bf.setBottomMargin(0)
+                bf.setTopMargin(0)
                 cursor.setBlockFormat(bf)
             block = block.next()
 
@@ -1270,8 +1287,9 @@ class PrompterView(QTextEdit):
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
+        # 切到直屏時也要重算 text wrap（文字要變全寬）
+        self._apply_text_wrap_width()
         if self._slide_deck is not None:
-            self._apply_text_wrap_width()
             self._relayout_slide_gaps()
 
     def wheelEvent(self, event: QWheelEvent) -> None:
