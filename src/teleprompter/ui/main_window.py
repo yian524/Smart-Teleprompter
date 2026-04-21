@@ -1870,16 +1870,24 @@ class MainWindow(QMainWindow):
         """以「過去 100 字 + 未來 100 字」作為 Whisper 的 initial_prompt。
 
         過去：保持上下文連貫；未來：讓 Whisper 預期下一段詞彙，提升專有名詞精度。
+        prompt 會剝掉 `#/##/###` 標題、`---` 分隔、`<!-- ... -->` 註解 —
+        這些記號若進到 prompt 會讓 Whisper 把單字 char 當 context，誘發 repeat loop。
         """
         if self.transcript is None:
             return
+        import re
         full = self.transcript.full_text
         cur = self.engine.current_global_char
         start = max(0, cur - 100)
         end = min(len(full), cur + 100)
-        prompt = full[start:end]
-        if prompt:
-            self.recognizer.update_prompt(prompt)
+        raw = full[start:end]
+        # 移除 <!-- ... --> 備忘、行首 #/##/### 標題、分隔線 ---/===/***
+        cleaned = re.sub(r"<!--.*?-->", "", raw, flags=re.DOTALL)
+        cleaned = re.sub(r"(?m)^\s*#{1,6}\s.*$", "", cleaned)
+        cleaned = re.sub(r"(?m)^\s*(?:-{3,}|={3,}|\*{3,})\s*$", "", cleaned)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        if cleaned:
+            self.recognizer.update_prompt(cleaned)
 
     def _on_model_loading(self, msg: str) -> None:
         """Whisper 發出的載入進度訊息（如「下載中」「載入中」）。"""

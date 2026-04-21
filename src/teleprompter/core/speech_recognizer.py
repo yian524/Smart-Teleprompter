@@ -133,6 +133,9 @@ class SpeechRecognizerWorker(QObject):
         # LocalAgreement 狀態
         self._prev_hypothesis: str = ""
         self._committed_in_current_window: int = 0  # 已 emit 過的 prefix 字元數（指 hypothesis 的前綴）
+        # Hallucination circuit breaker：連 N 次被濾就暫時 bypass initial_prompt，
+        # 避免 prompt 內的字（特別是單字 char）持續把 Whisper 鎖在 repeat loop
+        self._hallucination_streak: int = 0
 
     # ---- 對外控制 ----
 
@@ -256,10 +259,16 @@ class SpeechRecognizerWorker(QObject):
         # 過濾 Whisper hallucination（純靜音/噪音時 Whisper 會吐出重複片段）
         # 例：「我們採用了一個小型的小型的小型的小型...」
         if self._is_hallucination(text):
-            logger.info("filtered hallucination: %r", text[:60])
+            self._hallucination_streak += 1
+            logger.info(
+                "filtered hallucination (streak=%d): %r",
+                self._hallucination_streak, text[:60],
+            )
             if window.is_boundary:
                 self._reset_hypothesis()
             return
+        # 真正有內容 → 重設 streak
+        self._hallucination_streak = 0
 
         self.hypothesis.emit(text)
 
@@ -327,10 +336,15 @@ class SpeechRecognizerWorker(QObject):
 
     def _transcribe(self, samples) -> str:
         """Whisper 推論 + 後處理（語言強制、標點剝除）。"""
+        # Circuit breaker：連 2 次 hallucination → 這一次 bypass initial_prompt，
+        # 讓 Whisper 不再被 prompt 裡的字鎖進 repeat loop
+        effective_prompt = self.initial_prompt or None
+        if self._hallucination_streak >= 2:
+            effective_prompt = None
         segments_iter, info = self._model.transcribe(
             samples,
             language=self.language,
-            initial_prompt=self.initial_prompt or None,
+            initial_prompt=effective_prompt,
             beam_size=5,
             best_of=1,
             temperature=0.0,
