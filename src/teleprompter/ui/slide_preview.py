@@ -97,14 +97,28 @@ class SlidePreviewPanel(QWidget):
         # 允許鍵盤 focus 讓左右方向鍵被 keyPressEvent 收到
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
-        # 捲動區（視覺捲軸隱藏，只保留內部滾動功能讓滑鼠滾輪依舊可用）
+        # 捲動區：顯示垂直捲軸讓使用者可拖曳瀏覽多頁縮圖
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.scroll.setFrameShape(QFrame.Shape.NoFrame)
+        # 暗色主題細捲軸（配合其他面板）
         self.scroll.setStyleSheet(
             "QScrollArea { background-color: #2A2A2A; border: none; }"
-            " QScrollBar:vertical { width: 0px; background: transparent; }"
+            "QScrollBar:vertical {"
+            "  background: #2A2A2A; width: 10px; margin: 0;"
+            "}"
+            "QScrollBar::handle:vertical {"
+            "  background: #555555; min-height: 30px; border-radius: 5px;"
+            "}"
+            "QScrollBar::handle:vertical:hover { background: #777777; }"
+            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {"
+            "  height: 0; background: transparent;"
+            "}"
+            "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {"
+            "  background: transparent;"
+            "}"
         )
         self.scroll.verticalScrollBar().valueChanged.connect(self._on_scroll)
         outer.addWidget(self.scroll, 1)
