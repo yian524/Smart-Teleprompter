@@ -812,6 +812,36 @@ class MainWindow(QMainWindow):
         if self.cfg.last_transcript_path and Path(self.cfg.last_transcript_path).exists():
             self.load_file(self.cfg.last_transcript_path)
 
+    def _sanitize_legacy_format_spans(self, session: Session) -> None:
+        """檢查並清掉舊版 bug 殘留的壞 format_spans（覆蓋整篇的那種）。"""
+        if not session.format_spans:
+            return
+        if session.transcript is None or not session.transcript.full_text:
+            return
+        text_len = len(session.transcript.full_text)
+        if text_len <= 0:
+            return
+        # 計算總覆蓋
+        in_doc = [(max(0, s.start), min(text_len, s.end))
+                  for s in session.format_spans
+                  if s.end <= text_len * 1.05 and s.end > s.start]
+        if not in_doc:
+            return
+        merged: list[tuple[int, int]] = []
+        for s, e in sorted(in_doc):
+            if merged and s <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], e))
+            else:
+                merged.append((s, e))
+        total = sum(e - s for s, e in merged)
+        if total > text_len * 0.8:
+            logger.warning(
+                "session %s 的 format_spans 覆蓋 %.0f%% 全文，清除（壞資料救援）",
+                session.session_id, 100 * total / text_len,
+            )
+            session.format_spans = []
+            session.dirty = True
+
     def _rehydrate_session(self, session: Session) -> None:
         """對一個從 JSON 讀出的 session，載入 transcript 檔/投影片檔。
 
@@ -857,6 +887,8 @@ class MainWindow(QMainWindow):
                 missing.append("投影片")
         if missing:
             session.title = f"⚠️ {session.title}"
+        # 清理舊版 bug 殘留的壞 format_spans
+        self._sanitize_legacy_format_spans(session)
 
     def _save_current_transcript(self) -> None:
         """Ctrl+S：把目前 active session 的講稿存成 .txt。

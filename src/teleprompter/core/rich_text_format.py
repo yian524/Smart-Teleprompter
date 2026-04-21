@@ -131,14 +131,24 @@ def restore_formats(doc: QTextDocument, spans: list[FormatSpan]) -> None:
     text_len = len(doc.toPlainText())
     if text_len <= 0:
         return
-    for span in spans:
-        span_len = max(0, span.end - span.start)
-        # 只有在 span 完全落在 doc 內（不是越界待 clip）且覆蓋 >80% 時才視為壞資料
-        if span.end <= text_len * 1.05 and span_len > text_len * 0.8:
+    # 計算所有 span 的累計覆蓋（合併 overlap）。若總覆蓋 > 80% → 視為壞資料丟棄
+    in_doc_spans = [
+        (max(0, s.start), min(text_len, s.end)) for s in spans
+        if s.end <= text_len * 1.05 and s.end > s.start
+    ]
+    if in_doc_spans:
+        merged: list[tuple[int, int]] = []
+        for s, e in sorted(in_doc_spans):
+            if merged and s <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], e))
+            else:
+                merged.append((s, e))
+        total_covered = sum(e - s for s, e in merged)
+        if total_covered > text_len * 0.8:
             import logging
             logging.getLogger(__name__).warning(
-                "偵測到 FormatSpan 覆蓋 %.0f%% 全文（疑似舊版壞資料），已跳過全部格式還原",
-                100 * span_len / max(1, text_len),
+                "偵測到 FormatSpans 總覆蓋 %.0f%% 全文（疑似壞資料），已跳過全部格式還原",
+                100 * total_covered / max(1, text_len),
             )
             return
     for span in spans:
