@@ -335,12 +335,13 @@ class SpeechRecognizerWorker(QObject):
             best_of=1,
             temperature=0.0,
             vad_filter=True,
-            # VAD 放寬：較低的 speech threshold + 較短的靜音判定，避免小聲講話被整段丟掉
-            # （Silero 預設 threshold=0.5 對低音量麥克風太嚴，常把整段人聲誤判為靜音）
+            # VAD 再放寬：低音量麥 + 句間停頓都不要吃掉
+            # （實測 threshold=0.3 仍會把大半段人聲當靜音；0.2 幾乎不誤判 garbage
+            #   因為靜音時 Silero 機率 ≈ 0.05，距離 0.2 還有餘裕）
             vad_parameters={
-                "threshold": 0.3,
-                "min_silence_duration_ms": 300,
-                "speech_pad_ms": 200,
+                "threshold": 0.2,
+                "min_silence_duration_ms": 250,
+                "speech_pad_ms": 250,
             },
             condition_on_previous_text=False,
             # 回到 whisper 預設值。更嚴格的 0.8 / -0.8 雖能阻擋 hallucination，但也會

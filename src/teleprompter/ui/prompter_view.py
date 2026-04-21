@@ -636,24 +636,34 @@ class PrompterView(QTextEdit):
     # ---------- Markdown 視覺渲染 ----------
 
     def _scan_markdown_ranges(self) -> None:
-        """先掃描整份文件，記錄所有 MD 樣式 block 的字元範圍 + 水平線 block。"""
+        """先掃描整份文件，記錄所有 MD 樣式 block 的字元範圍 + 水平線 block + 內嵌註解。"""
+        import re as _re
+        inline_comment_re = _re.compile(r"<!--.*?-->", _re.DOTALL)
         self._md_styled_ranges = []
         self._hr_blocks = []
         doc = self.document()
         block = doc.firstBlock()
         while block.isValid():
-            stripped = block.text().strip()
+            text = block.text()
+            stripped = text.strip()
+            block_pos = block.position()
             if (
                 stripped.startswith(("# ", "## ", "### "))
                 or stripped in ("---", "===", "***")
                 or (stripped.startswith("<!--") and stripped.endswith("-->"))
             ):
-                bs = block.position()
+                bs = block_pos
                 be = bs + block.length() - 1
                 if be > bs:
                     self._md_styled_ranges.append((bs, be))
                 if stripped in ("---", "===", "***"):
                     self._hr_blocks.append(block.blockNumber())
+            else:
+                # 非全行 MD → 掃 inline 註解（讓 karaoke 高亮跳過）
+                for m in inline_comment_re.finditer(text):
+                    self._md_styled_ranges.append(
+                        (block_pos + m.start(), block_pos + m.end())
+                    )
             block = block.next()
         self._md_styled_ranges = self._merge_ranges(self._md_styled_ranges)
 
@@ -718,6 +728,21 @@ class PrompterView(QTextEdit):
                 cursor.mergeCharFormat(fmt)
                 if block_fmt is not None:
                     cursor.setBlockFormat(block_fmt)
+            else:
+                # 非全行 MD → 對 inline 註解套灰階斜體（讓使用者一眼看得出是備忘）
+                import re as _re
+                inline_re = _re.compile(r"<!--.*?-->", _re.DOTALL)
+                inline_fmt = QTextCharFormat()
+                inline_fmt.setForeground(QColor("#707070"))
+                inline_fmt.setFontItalic(True)
+                for m in inline_re.finditer(text):
+                    c = QTextCursor(block)
+                    c.setPosition(block.position() + m.start())
+                    c.setPosition(
+                        block.position() + m.end(),
+                        QTextCursor.MoveMode.KeepAnchor,
+                    )
+                    c.mergeCharFormat(inline_fmt)
             block = block.next()
 
     def _repaint_delta(self, old_pos: int, new_pos: int) -> None:
