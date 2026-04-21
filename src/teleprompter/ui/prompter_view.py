@@ -1073,15 +1073,18 @@ class PrompterView(QTextEdit):
             return
         self.setLineWrapMode(QTextEdit.LineWrapMode.FixedPixelWidth)
         w = max(200, int(vw * self._text_width_ratio))
-        self.setLineWrapColumnOrWidth(w)
         if self._layout_swapped:
-            # 左圖右文：split line 在 vw - w 處；所有 block 左邊縮進 vw - w 讓文字靠右
+            # 左圖右文：split line 在 vw - w；block leftMargin = vw - w 讓文字靠右
+            # wrap 寬度須設為 leftMargin + w（Qt 的 lineWrapColumnOrWidth 是整份文件寬，
+            # 實際文字欄 = wrap - leftMargin，若只設 w 會被擠成 2w - vw 窄條）
             self._split_line_x = vw - w
             self._apply_block_left_margin(vw - w)
+            self.setLineWrapColumnOrWidth(vw)
         else:
             # 左文右圖（預設）：split line 在 w 處；文字從 x=0 開始
             self._split_line_x = w
             self._apply_block_left_margin(0)
+            self.setLineWrapColumnOrWidth(w)
 
     def _apply_block_left_margin(self, left_margin: int) -> None:
         """將所有 block 的 leftMargin 設為 left_margin（讓文字整體往右偏移）。"""
