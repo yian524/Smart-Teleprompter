@@ -136,6 +136,9 @@ class SpeechRecognizerWorker(QObject):
         # Hallucination circuit breaker：連 N 次被濾就暫時 bypass initial_prompt，
         # 避免 prompt 內的字（特別是單字 char）持續把 Whisper 鎖在 repeat loop
         self._hallucination_streak: int = 0
+        # Hypothesis stability timeout：相同 text 重複 N 次 → 強制 commit 剩餘未 emit 部分
+        # （避免使用者講完停下、webrtcvad 沒偵測到 boundary、hypothesis 永遠卡在 UI 不進 engine）
+        self._stable_hypothesis_count: int = 0
 
     # ---- 對外控制 ----
 
@@ -288,6 +291,22 @@ class SpeechRecognizerWorker(QObject):
                 self.text_committed.emit(delta)
             self._committed_in_current_window = stable_len
 
+        # Stability timeout：text 與上一次完全相同 → 累計計數；
+        # 連 3 次都沒變（~1s，以 EMIT_INTERVAL_MS=350 計）→ 判定使用者已講完這段，
+        # 把尚未 commit 的尾段直接發出去，不要讓它卡在 hypothesis 永不進 engine
+        if text == self._prev_hypothesis and text.strip():
+            self._stable_hypothesis_count += 1
+            if self._stable_hypothesis_count >= 3 and len(text) > self._committed_in_current_window:
+                tail = text[self._committed_in_current_window:]
+                if tail.strip():
+                    self.text_committed.emit(tail)
+                self._committed_in_current_window = len(text)
+                # 發完後 reset，下一輪新內容重新計
+                self._reset_hypothesis()
+                return
+        else:
+            self._stable_hypothesis_count = 0
+
         # 若 text 比之前短或完全不同 → 視窗已滾動，重設追蹤
         # Bug 修正：原本 text.startswith(text[:N]) 永遠 True，等於這條檢查無效
         # 改為比對「之前的 hypothesis 前綴」是否仍為當前 text 的前綴
@@ -330,6 +349,7 @@ class SpeechRecognizerWorker(QObject):
     def _reset_hypothesis(self) -> None:
         self._prev_hypothesis = ""
         self._committed_in_current_window = 0
+        self._stable_hypothesis_count = 0
 
     # Whisper 輸出後要剝除的標點（讓比對與顯示更乾淨）
     _PUNCT_TO_STRIP = "。，！？!?；;,：:、…．·"
