@@ -341,6 +341,7 @@ class SlidePreviewPanel(QWidget):
         if self._deck is None or not self._page_images:
             return
         target_w = max(80, self.scroll.viewport().width() - 40)
+        dpr = self.devicePixelRatioF() or 1.0
         sb = self.scroll.verticalScrollBar()
         top = sb.value()
         bottom = top + self.scroll.viewport().height()
@@ -352,15 +353,21 @@ class SlidePreviewPanel(QWidget):
                 continue
             if y > bottom + margin:
                 break
-            # 已按當前寬度渲染過 → 跳過
-            if self._rendered_widths.get(i + 1) == target_w:
+            # 已按當前寬度 + DPR 渲染過 → 跳過
+            if self._rendered_widths.get(i + 1) == (target_w, round(dpr, 2)):
                 continue
-            pix = self._deck.render(i + 1, target_w)
+            pix = self._deck.render(i + 1, target_w, dpr)
             if pix is not None:
                 img.setText("")
                 img.setPixmap(pix)
-                img.setFixedSize(pix.size())   # label 緊貼 pixmap，無黑邊
-                self._rendered_widths[i + 1] = target_w
+                # 邏輯像素尺寸（pix.size() 是物理像素；要除以 DPR 才是 label 該佔的版面大小）
+                d = pix.devicePixelRatio() or 1.0
+                from PySide6.QtCore import QSize
+                img.setFixedSize(QSize(
+                    int(round(pix.width() / d)),
+                    int(round(pix.height() / d)),
+                ))
+                self._rendered_widths[i + 1] = (target_w, round(dpr, 2))
 
     def _clear_guard(self) -> None:
         self._programmatic_scroll = False

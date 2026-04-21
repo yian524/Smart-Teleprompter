@@ -241,7 +241,12 @@ class ScreenVideoEncoder(QObject):
         # scale 到固定尺寸（視窗 resize 時）
         w, h = self._size
         if pix.width() != w or pix.height() != h:
-            pix = pix.scaled(w, h)
+            from PySide6.QtCore import Qt
+            pix = pix.scaled(
+                w, h,
+                Qt.AspectRatioMode.IgnoreAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
         img = pix.toImage().convertToFormat(QImage.Format.Format_RGB888)
         # QImage 記憶體每 scanline 可能有 padding，需取 bits()
         bits = img.constBits()

@@ -104,9 +104,10 @@ class SlideViewerDialog(QDialog):
         if page_no < 1 or page_no > self._deck.page_count:
             return
         self._page_no = page_no
-        # 用目前 view 寬度渲染高解析圖
+        # 用目前 view 寬度渲染高解析圖（乘上 DPR 避免 HiDPI 下變糊）
         target_w = max(1200, int(self._view.viewport().width() * 1.2))
-        pix = self._deck.render(page_no, target_w)
+        dpr = self.devicePixelRatioF() or 1.0
+        pix = self._deck.render(page_no, target_w, dpr)
         self._scene.clear()
         self._pixmap_item = None
         if pix is None or pix.isNull():

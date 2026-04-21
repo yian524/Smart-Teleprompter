@@ -82,21 +82,30 @@ class SlideDeck:
             )
         self._pages = pages
 
-    def render(self, page_no: int, width_px: int) -> Optional[QPixmap]:
-        """取得指定頁面的 QPixmap，寬度為 width_px，高度等比。
+    def render(
+        self, page_no: int, width_px: int, dpr: float = 1.0
+    ) -> Optional[QPixmap]:
+        """取得指定頁面的 QPixmap。
 
+        width_px: 目標**邏輯像素**寬；高度等比
+        dpr: device pixel ratio。實際以 width_px * dpr 物理像素渲染，
+             並設 pix.setDevicePixelRatio(dpr) 讓 Qt 以邏輯像素大小繪製 →
+             HiDPI 螢幕上原生銳利。
         page_no: 1-based。越界回傳 None。
         """
         self._ensure_open()
         if page_no < 1 or page_no > len(self._pages):
             return None
         width_px = max(64, min(4096, int(width_px)))
-        key = (page_no, width_px)
+        dpr = max(1.0, float(dpr))
+        phys_w = max(64, min(8192, int(round(width_px * dpr))))
+        key = (page_no, phys_w, round(dpr, 2))
         cached = self._render_cache.get(key)
         if cached is not None:
             return cached
 
-        pix = self._render_pixmap(page_no, width_px)
+        pix = self._render_pixmap(page_no, phys_w)
+        pix.setDevicePixelRatio(dpr)
         self._render_cache[key] = pix
         self._render_order.append(key)
         # LRU：超過上限 pop 最舊

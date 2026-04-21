@@ -897,13 +897,15 @@ class PrompterView(QTextEdit):
                     vy = draw_y_doc - sb_value
                     if vy + slide_h < -20 or vy > vh + 20:
                         continue
-                    pix = self._slide_deck.render(page_no, slide_w)
+                    dpr = self.devicePixelRatioF() or 1.0
+                    pix = self._slide_deck.render(page_no, slide_w, dpr)
                     if pix is not None and not pix.isNull():
                         painter.drawPixmap(slide_x, vy, pix)
                         pen = QPen(QColor("#3A3A3A"))
                         pen.setWidth(1)
                         painter.setPen(pen)
-                        painter.drawRect(slide_x, vy, pix.width(), pix.height())
+                        # 邏輯像素框（slide_w / slide_h）；pix.width() 在 HiDPI 是物理像素
+                        painter.drawRect(slide_x, vy, slide_w, slide_h)
                     else:
                         painter.fillRect(slide_x, vy, slide_w, slide_h,
                                          QColor("#1A1A1A"))

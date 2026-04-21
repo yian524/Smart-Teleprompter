@@ -1162,11 +1162,13 @@ class SlideModeView(QWidget):
         x = rect.left() + (rect.width() - target_w) // 2
         y = rect.top() + (rect.height() - target_h) // 2
 
-        pix = self._slide_deck.render(page_no, target_w)
+        dpr = self.devicePixelRatioF() or 1.0
+        pix = self._slide_deck.render(page_no, target_w, dpr)
         slide_rect = QRect(x, y, target_w, target_h)
         if pix is not None and not pix.isNull():
             painter.drawPixmap(x, y, pix)
-            slide_rect = QRect(x, y, pix.width(), pix.height())
+            # slide_rect 用邏輯像素（target_w/target_h）；pix.width()/height() 在 HiDPI 下是物理像素
+            slide_rect = QRect(x, y, target_w, target_h)
             painter.setPen(QColor("#3A3A3A"))
             painter.drawRect(slide_rect)
         else:

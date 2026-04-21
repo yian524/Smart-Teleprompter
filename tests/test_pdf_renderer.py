@@ -105,3 +105,52 @@ def test_load_slide_deck_valid_file(sample_pdf, qt_app):
     deck = load_slide_deck(sample_pdf)
     assert deck.page_count == 3
     deck.close()
+
+
+# --- HiDPI / DPR ---
+
+
+def test_render_respects_dpr_2x(sample_pdf, qt_app):
+    """HiDPI：dpr=2.0 → pixmap 實際寬 2x 物理像素，但 Qt 以邏輯像素繪製。"""
+    from teleprompter.core.pdf_renderer import SlideDeck
+
+    deck = SlideDeck(sample_pdf)
+    pix_1x = deck.render(1, 400, dpr=1.0)
+    pix_2x = deck.render(1, 400, dpr=2.0)
+    assert pix_1x is not None and pix_2x is not None
+    assert pix_1x.width() == 400
+    assert pix_1x.devicePixelRatio() == 1.0
+    # 2x DPR：物理像素 800，但 Qt 以 400 邏輯像素繪製
+    assert pix_2x.width() == 800
+    assert pix_2x.devicePixelRatio() == 2.0
+    # 驗證：邏輯像素寬 = 物理 / DPR
+    assert int(round(pix_2x.width() / pix_2x.devicePixelRatio())) == 400
+    deck.close()
+
+
+def test_render_cache_distinct_by_dpr(sample_pdf, qt_app):
+    """同 page + 同 logical width 但不同 DPR → 各自獨立快取。"""
+    from teleprompter.core.pdf_renderer import SlideDeck
+
+    deck = SlideDeck(sample_pdf)
+    deck.render(1, 400, dpr=1.0)
+    deck.render(1, 400, dpr=2.0)
+    assert len(deck._render_cache) == 2
+    # 再呼叫應命中快取，不增加
+    p1 = deck.render(1, 400, dpr=1.0)
+    p2 = deck.render(1, 400, dpr=2.0)
+    assert len(deck._render_cache) == 2
+    assert p1.devicePixelRatio() == 1.0
+    assert p2.devicePixelRatio() == 2.0
+    deck.close()
+
+
+def test_render_default_dpr_is_1(sample_pdf, qt_app):
+    """沒傳 DPR 時 → 預設 1.0（向後相容）。"""
+    from teleprompter.core.pdf_renderer import SlideDeck
+
+    deck = SlideDeck(sample_pdf)
+    pix = deck.render(1, 400)
+    assert pix.devicePixelRatio() == 1.0
+    assert pix.width() == 400
+    deck.close()
