@@ -1445,8 +1445,8 @@ class MainWindow(QMainWindow):
         page = self.transcript.pages[page_no - 1]
         result = self.engine.jump_to_sentence(page.sentence_start)
         self.view.set_position(result.global_char_pos, animate=False)
-        # 投影片模式：同步 SlideModeView 到新頁
-        if self._view_mode == "slide":
+        # 若目前用的是 SlideModeView（slide 模式 or 直屏 split）→ 同步新頁
+        if self._content_stack.currentIndex() == 1:
             self.slide_mode_view.set_current_page(page_no - 1)
 
     def _sync_slide_to_current_sentence(self) -> None:
@@ -1838,11 +1838,23 @@ class MainWindow(QMainWindow):
             self.showFullScreen()
 
     def _apply_orientation_layout(self) -> None:
-        """依視窗寬高比調整 UI：直屏時縮短 mic bar + 主工具列拆成兩欄常駐。"""
+        """依視窗寬高比調整 UI：直屏時縮短 mic bar + 主工具列拆成兩欄常駐。
+        split 模式也要跟著橫/直屏切換底層 view（嵌入式 vs SlideModeView 堆疊）。"""
         is_portrait = self.width() < self.height()
         if hasattr(self, "mic_level"):
             self.mic_level.setFixedWidth(60 if is_portrait else 120)
         self._layout_main_toolbar(is_portrait)
+        # split 模式：橫/直屏切換時重跑 _set_view_mode 讓底層 view 換對
+        if getattr(self, "_view_mode", None) == "split":
+            active = self.session_manager.active if hasattr(self, "session_manager") else None
+            deck = active.slide_deck if active is not None else None
+            want_portrait_split = is_portrait and deck is not None
+            currently_on_slide_view = (
+                hasattr(self, "_content_stack")
+                and self._content_stack.currentIndex() == 1
+            )
+            if want_portrait_split != currently_on_slide_view:
+                self._set_view_mode("split")
 
     def _layout_main_toolbar(self, is_portrait: bool) -> None:
         """主工具列：landscape 全部在 row 1；portrait 拆成兩欄常駐顯示。"""
@@ -2023,56 +2035,62 @@ class MainWindow(QMainWindow):
             self.view.set_slide_deck(None)
             self.slide_preview.hide()
         elif mode == "split":
-            # PrompterView：文左嵌入式圖右（預設）
-            self._content_stack.setCurrentIndex(0)
-            self.view.set_slide_deck(deck)
-            self.slide_preview.hide()
-        elif mode == "slide":
-            # SlideModeView：單頁獨立版面
-            self.slide_mode_view.set_transcript(self.transcript)
-            self.slide_mode_view.set_slide_deck(deck)
-            try:
-                self.slide_mode_view.set_format_spans(self.view.dump_format_spans())
-            except Exception:
-                pass
-            # 載入已儲存的標註（slide 錨點給 slide_mode_view、doc 錨點給 view）
-            if active is not None:
-                self.slide_mode_view.set_annotations(
-                    [a for a in active.annotations if a.anchor == "slide"]
-                )
-                self.view.set_annotations(
-                    [a for a in active.annotations if a.anchor == "doc"]
-                )
-            self.slide_mode_view.set_current_page(self._current_page_idx())
-            # 還原版面對調狀態
-            swap = active.layout_swapped if active is not None else False
-            self._layout_swapped = swap
-            self.slide_mode_view.set_layout_swapped(swap)
-            if hasattr(self, "btn_swap_layout"):
-                self.btn_swap_layout.setText("⇄" if swap else "⇆")
-            self._content_stack.setCurrentIndex(1)
-            self.slide_mode_view.setFocus()
-            # 左側縮圖列
-            if deck is not None:
-                title = (
-                    Path(active.slides_path).name
-                    if active and active.slides_path
-                    else "投影片"
-                )
-                self.slide_preview.set_deck(deck, title=title)
-                self.slide_preview.show()
-                self.slide_preview.scroll_to_page(self._current_page_idx() + 1)
-                width = active.thumbnail_panel_width if active is not None else 200
-                self._set_thumbnail_width(width)
+            # 直屏 + 有投影片 → 用 SlideModeView（上下堆疊）；否則 PrompterView 嵌入式
+            is_portrait = self.width() < self.height()
+            if is_portrait and deck is not None:
+                self._enter_slide_mode_view(deck, active, show_thumbnails=False)
             else:
+                self._content_stack.setCurrentIndex(0)
+                self.view.set_slide_deck(deck)
                 self.slide_preview.hide()
-                self.status_recognized.setText(
-                    "投影片模式（未載入投影片：左右鍵仍可跳頁）"
-                )
+        elif mode == "slide":
+            self._enter_slide_mode_view(deck, active, show_thumbnails=True)
 
         # 持久化到 active session
         if active is not None:
             active.view_mode = mode
+
+    def _enter_slide_mode_view(self, deck, active, show_thumbnails: bool) -> None:
+        """切到 SlideModeView（上下/左右堆疊）。
+        show_thumbnails=True 為正式 slide 模式；False 為直屏 split 模式（隱藏縮圖列）。"""
+        self.slide_mode_view.set_transcript(self.transcript)
+        self.slide_mode_view.set_slide_deck(deck)
+        try:
+            self.slide_mode_view.set_format_spans(self.view.dump_format_spans())
+        except Exception:
+            pass
+        if active is not None:
+            self.slide_mode_view.set_annotations(
+                [a for a in active.annotations if a.anchor == "slide"]
+            )
+            self.view.set_annotations(
+                [a for a in active.annotations if a.anchor == "doc"]
+            )
+        self.slide_mode_view.set_current_page(self._current_page_idx())
+        swap = active.layout_swapped if active is not None else False
+        self._layout_swapped = swap
+        self.slide_mode_view.set_layout_swapped(swap)
+        if hasattr(self, "btn_swap_layout"):
+            self.btn_swap_layout.setText("⇄" if swap else "⇆")
+        self._content_stack.setCurrentIndex(1)
+        self.slide_mode_view.setFocus()
+        if show_thumbnails and deck is not None:
+            title = (
+                Path(active.slides_path).name
+                if active and active.slides_path
+                else "投影片"
+            )
+            self.slide_preview.set_deck(deck, title=title)
+            self.slide_preview.show()
+            self.slide_preview.scroll_to_page(self._current_page_idx() + 1)
+            width = active.thumbnail_panel_width if active is not None else 200
+            self._set_thumbnail_width(width)
+        else:
+            self.slide_preview.hide()
+            if show_thumbnails and deck is None:
+                self.status_recognized.setText(
+                    "投影片模式（未載入投影片：左右鍵仍可跳頁）"
+                )
 
     def _set_thumbnail_width(self, width: int) -> None:
         """設定縮圖列在 content_splitter 的寬度。width=0 表示收合。"""
@@ -2147,8 +2165,8 @@ class MainWindow(QMainWindow):
         # engine 同步（保留對齊狀態，切回 split 模式也會在正確位置）
         result = self.engine.jump_to_sentence(page.sentence_start)
         self.view.set_position(result.global_char_pos, animate=False)
-        # 投影片模式下：更新 SlideModeView 顯示新頁
-        if self._view_mode == "slide":
+        # 目前用 SlideModeView（slide 模式 or 直屏 split）→ 同步新頁
+        if self._content_stack.currentIndex() == 1:
             self.slide_mode_view.set_current_page(new_idx)
         # 縮圖列同步
         if self.slide_deck is not None and 1 <= page.number <= self.slide_deck.page_count:
