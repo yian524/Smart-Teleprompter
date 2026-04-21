@@ -121,10 +121,26 @@ def dump_formats(doc: QTextDocument) -> list[FormatSpan]:
 
 
 def restore_formats(doc: QTextDocument, spans: list[FormatSpan]) -> None:
-    """把一系列 FormatSpan 套回 doc。以純文字 offset 為準，越界會被自動 clip。"""
+    """把一系列 FormatSpan 套回 doc。以純文字 offset 為準，越界會被自動 clip。
+
+    **安全機制**：若任一 span 覆蓋整篇 >80%，視為舊版 bug 殘留的壞資料 → 全部丟棄。
+    使用者可用編輯模式 + `全部清除格式` 手動重建。
+    """
     if not spans:
         return
     text_len = len(doc.toPlainText())
+    if text_len <= 0:
+        return
+    for span in spans:
+        span_len = max(0, span.end - span.start)
+        # 只有在 span 完全落在 doc 內（不是越界待 clip）且覆蓋 >80% 時才視為壞資料
+        if span.end <= text_len * 1.05 and span_len > text_len * 0.8:
+            import logging
+            logging.getLogger(__name__).warning(
+                "偵測到 FormatSpan 覆蓋 %.0f%% 全文（疑似舊版壞資料），已跳過全部格式還原",
+                100 * span_len / max(1, text_len),
+            )
+            return
     for span in spans:
         start = max(0, min(text_len, span.start))
         end = max(0, min(text_len, span.end))

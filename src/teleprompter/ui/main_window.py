@@ -617,17 +617,22 @@ class MainWindow(QMainWindow):
         self.edit_toolbar.addAction(self.act_highlight)
 
         self.act_clear_fmt = QAction("✖格式", self)
-        self.act_clear_fmt.setToolTip("清除格式 (Ctrl+\\)")
+        self.act_clear_fmt.setToolTip("清除選取範圍的格式 (Ctrl+\\)")
         self.act_clear_fmt.setShortcut("Ctrl+\\")
         self.act_clear_fmt.triggered.connect(self.view.clear_format)
         self.edit_toolbar.addAction(self.act_clear_fmt)
+
+        self.act_clear_all_fmt = QAction("🧽 全部清除", self)
+        self.act_clear_all_fmt.setToolTip("清除整篇文字的粗體/斜體/底線/螢光筆格式（不需選取）")
+        self.act_clear_all_fmt.triggered.connect(self._clear_all_formatting)
+        self.edit_toolbar.addAction(self.act_clear_all_fmt)
 
         # 預設隱藏整條 edit toolbar（只在編輯模式顯示）
         self.edit_toolbar.setVisible(False)
         for act in (
             self.act_insert_annotation, self.act_compact_ws,
             self.act_bold, self.act_italic, self.act_underline,
-            self.act_highlight, self.act_clear_fmt,
+            self.act_highlight, self.act_clear_fmt, self.act_clear_all_fmt,
         ):
             act.setEnabled(False)
 
@@ -1780,6 +1785,15 @@ class MainWindow(QMainWindow):
             return
         self.view.insert_annotation_at_cursor("")
 
+    def _clear_all_formatting(self) -> None:
+        """救援按鈕：清除整篇文字的粗體/斜體/底線/螢光筆，並清除 session 中保存的 format_spans。"""
+        self.view.clear_all_formatting()
+        active = self.session_manager.active
+        if active is not None:
+            active.format_spans = []
+            active.dirty = True
+        self.status_recognized.setText("🧽 已清除整篇格式")
+
     def _compact_whitespace(self) -> None:
         """一鍵清理多餘空白（僅編輯模式可用）。"""
         if not self.view.is_edit_mode():
@@ -1788,7 +1802,6 @@ class MainWindow(QMainWindow):
         self.status_recognized.setText("🧹 已清理多餘空白")
 
     def _on_edit_mode_changed(self, enabled: bool) -> None:
-        # 整條編輯工具列在非編輯模式隱藏；內部 action 設 enable 同步
         self.edit_toolbar.setVisible(enabled)
         for act in (
             self.act_insert_annotation,
@@ -1798,6 +1811,7 @@ class MainWindow(QMainWindow):
             self.act_underline,
             self.act_highlight,
             self.act_clear_fmt,
+            self.act_clear_all_fmt,
         ):
             act.setEnabled(enabled)
         if enabled:

@@ -333,6 +333,22 @@ class PrompterView(QTextEdit):
             return
         clear_format_in_range(cursor)
 
+    def clear_all_formatting(self) -> None:
+        """救援按鈕：清除整份文件的使用者格式（粗體/斜體/底線/螢光筆）。
+        不需選取即可使用。不影響 MD 標題/註解的樣式（那會在下次 MD refresh 重新套用）。
+        """
+        from ..core.rich_text_format import clear_format_in_range
+        doc = self.document()
+        if doc.isEmpty():
+            return
+        cursor = QTextCursor(doc)
+        cursor.select(QTextCursor.SelectionType.Document)
+        clear_format_in_range(cursor)
+        # 觸發 MD refresh 重套結構性樣式
+        if self._md_rendering:
+            self._apply_markdown_rendering()
+        self.viewport().update()
+
     def dump_format_spans(self) -> list:
         """匯出目前格式到 list[FormatSpan]（序列化用）。"""
         from ..core.rich_text_format import dump_formats
