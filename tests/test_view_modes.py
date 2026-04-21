@@ -443,6 +443,70 @@ def test_slide_mode_view_swap_flips_columns(app):
     assert slide2.left() < slide1.left()
 
 
+def test_color_picker_sets_tool_color_on_both_views(main_window):
+    """顏色按鈕 → 派送到兩個 view 的 tool color。"""
+    main_window._set_annotation_color("#F44336")  # 紅
+    # 兩個 view 的 tool_color 都該更新
+    assert main_window.view._tool_color.name().lower() == "#f44336"
+    assert main_window.slide_mode_view._tool_color.name().lower() == "#f44336"
+    # 換成藍
+    main_window._set_annotation_color("#2196F3")
+    assert main_window.view._tool_color.name().lower() == "#2196f3"
+    assert main_window.slide_mode_view._tool_color.name().lower() == "#2196f3"
+
+
+def test_color_presets_exist_in_toolbar(main_window):
+    """3 個預設色 + 1 個自訂按鈕在 annotation_toolbar 上。"""
+    assert hasattr(main_window, "_color_preset_btns")
+    assert len(main_window._color_preset_btns) == 3
+    assert hasattr(main_window, "btn_color_custom")
+
+
+def test_clear_page_button_exists(main_window):
+    """🧹 清除本頁 按鈕應存在於 annotation_toolbar。"""
+    assert hasattr(main_window, "act_clear_page")
+
+
+def test_clear_page_removes_slide_annotations_for_current_page(main_window, tmp_path, monkeypatch):
+    """在 slide mode 按清除本頁 → 只清當前頁 slide 錨點標註。"""
+    from PySide6.QtWidgets import QMessageBox
+    from teleprompter.core.annotations import Annotation
+
+    _load_multi_page(main_window, tmp_path)
+    main_window._set_view_mode("slide")
+    # 設兩個標註：頁 1 / 頁 2
+    main_window.slide_mode_view.set_annotations([
+        Annotation(kind="note", anchor="slide", slide_page=1, text="P1"),
+        Annotation(kind="note", anchor="slide", slide_page=2, text="P2"),
+    ])
+    main_window.slide_mode_view.set_current_page(0)  # page 1
+    # Auto-confirm dialog
+    monkeypatch.setattr(
+        QMessageBox, "question",
+        staticmethod(lambda *a, **kw: QMessageBox.StandardButton.Yes),
+    )
+    main_window._clear_current_page_annotations()
+    # 頁 1 的被清；頁 2 的保留
+    remaining = main_window.slide_mode_view.annotations()
+    assert len(remaining) == 1
+    assert remaining[0].slide_page == 2
+
+
+def test_toolbar_order_pencil_then_colors_then_note(main_window):
+    """工具列順序：鉛筆 → 顏色 → 便利貼 → 橡皮擦 → 清除本頁（無獨立選字按鈕）。"""
+    actions = [a for a in main_window.annotation_toolbar.actions()]
+    idx_pencil = actions.index(main_window.act_tool_pencil)
+    idx_note = actions.index(main_window.act_tool_note)
+    idx_eraser = actions.index(main_window.act_tool_eraser)
+    idx_clear = actions.index(main_window.act_clear_page)
+    assert idx_pencil < idx_note < idx_eraser < idx_clear
+
+
+def test_select_tool_action_removed(main_window):
+    """選字按鈕已移除（改成指標模式自動偵測）。"""
+    assert not hasattr(main_window, "act_tool_select")
+
+
 def test_slide_mode_view_splitter_ratio_clamped(app):
     """拖拉 x 超出 clamp 範圍時應被限制到 [MIN, MAX]。"""
     from PySide6.QtCore import QEvent, QPointF

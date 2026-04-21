@@ -15,6 +15,8 @@ from PySide6.QtCore import (
     QEvent,
     QPropertyAnimation,
     QPoint,
+    QPointF,
+    QRect,
     QTimer,
     Qt,
     Signal,
@@ -25,6 +27,7 @@ from PySide6.QtGui import (
     QKeyEvent,
     QMouseEvent,
     QPainter,
+    QPainterPath,
     QPaintEvent,
     QPen,
     QTextBlockFormat,
@@ -32,7 +35,10 @@ from PySide6.QtGui import (
     QTextCursor,
     QWheelEvent,
 )
-from PySide6.QtWidgets import QTextEdit
+from PySide6.QtWidgets import QInputDialog, QTextEdit
+
+from ..core.annotations import Annotation
+from .slide_mode_view import _paint_sticky_body
 
 
 class PrompterView(QTextEdit):
@@ -43,6 +49,13 @@ class PrompterView(QTextEdit):
     edit_mode_changed = Signal(bool)
     text_edited = Signal(str)  # 編輯模式關閉時發出最新文本
     slide_double_clicked = Signal(int)  # 雙擊右欄 slide → 發該 page_no
+    annotations_changed = Signal()    # 標註有變動 → 通知 MainWindow 存檔
+
+    # 工具 const（與 slide_mode_view 相同字串，MainWindow 可統一派送）
+    TOOL_POINTER = "pointer"
+    TOOL_PENCIL = "pencil"
+    TOOL_NOTE = "note"
+    TOOL_ERASER = "eraser"
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -60,6 +73,20 @@ class PrompterView(QTextEdit):
         self._edit_mode = False
         # Markdown 視覺渲染：#/##/### 標題放大粗體、--- 分隔線、<!-- --> 註解灰階
         self._md_rendering = True
+
+        # ==== 標註工具狀態 ====
+        self._tool = self.TOOL_POINTER
+        self._tool_color = QColor("#FFEB3B")
+        self._tool_stroke_width = 3
+        # 當前講稿的 doc-anchor 標註（slide-anchor 的由 slide_mode_view 管）
+        self._annotations: list[Annotation] = []
+        # 正在繪製的筆劃：viewport 座標點列表（finalize 時 normalize 為 x_ratio + doc_y）
+        self._drawing_stroke: list[QPointF] = []
+        # 拖拉中的便利貼（指標模式下）
+        self._dragging_note: Annotation | None = None
+        self._drag_offset: QPoint = QPoint(0, 0)
+        # 縮放中的便利貼（右下角 handle 拖拉）
+        self._resizing_note: Annotation | None = None
 
         # 編輯時 MD 渲染 debounce（避免每次 keystroke 都整篇重掃）
         self._md_refresh_timer = QTimer(self)
@@ -355,6 +382,39 @@ class PrompterView(QTextEdit):
         if self._md_rendering:
             self._apply_markdown_rendering()
         self.viewport().update()
+
+    # ---------- 標註工具 API（與 slide_mode_view 同介面）----------
+
+    def set_tool(self, tool: str) -> None:
+        if tool not in (self.TOOL_POINTER, self.TOOL_PENCIL, self.TOOL_NOTE, self.TOOL_ERASER):
+            return
+        self._tool = tool
+        cursors = {
+            self.TOOL_POINTER: Qt.CursorShape.IBeamCursor,  # QTextEdit 原本游標
+            self.TOOL_PENCIL: Qt.CursorShape.CrossCursor,
+            self.TOOL_NOTE: Qt.CursorShape.PointingHandCursor,
+            self.TOOL_ERASER: Qt.CursorShape.ForbiddenCursor,
+        }
+        self.viewport().setCursor(cursors.get(tool, Qt.CursorShape.ArrowCursor))
+        self.viewport().update()
+
+    def current_tool(self) -> str:
+        return self._tool
+
+    def set_tool_color(self, color: str) -> None:
+        self._tool_color = QColor(color)
+
+    def set_tool_stroke_width(self, w: int) -> None:
+        self._tool_stroke_width = max(1, min(20, int(w)))
+
+    def set_annotations(self, annotations: list[Annotation]) -> None:
+        """從 session 載入 doc-anchor 標註。"""
+        self._annotations = [a for a in annotations if a.anchor == "doc"]
+        self.viewport().update()
+
+    def annotations(self) -> list[Annotation]:
+        """回傳所有 doc-anchor 標註給 session 持久化。"""
+        return list(self._annotations)
 
     def dump_format_spans(self) -> list:
         """匯出目前格式到 list[FormatSpan]（序列化用）。"""
@@ -897,8 +957,56 @@ class PrompterView(QTextEdit):
                 color = self._current_split_color()
                 width = 4
                 painter.fillRect(x - width // 2, 0, width, vh, color)
+
+            # 4) Doc-anchor 標註（最後畫，蓋在所有內容上）
+            self._paint_doc_annotations(painter, sb_value, vw, vh)
+            # 正在繪製中的筆劃
+            if self._tool == self.TOOL_PENCIL and self._drawing_stroke:
+                pen = QPen(self._tool_color)
+                pen.setWidth(self._tool_stroke_width)
+                pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+                pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+                painter.setPen(pen)
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawPolyline(self._drawing_stroke)
         finally:
             painter.end()
+
+    def _paint_doc_annotations(
+        self, painter: QPainter, sb_value: int, vw: int, vh: int,
+    ) -> None:
+        """把 doc-anchor 標註畫到 viewport。座標轉換：(x_ratio, doc_y) → (x_ratio*vw, doc_y - sb)。"""
+        for ann in self._annotations:
+            if ann.kind == "stroke":
+                pen = QPen(QColor(ann.color))
+                pen.setWidth(ann.stroke_width)
+                pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+                pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+                painter.setPen(pen)
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                for segment in ann.strokes:
+                    if len(segment) < 2:
+                        continue
+                    ys = [p[1] - sb_value for p in segment]
+                    if max(ys) < -20 or min(ys) > vh + 20:
+                        continue
+                    points = [QPointF(x * vw, y - sb_value) for (x, y) in segment]
+                    painter.drawPolyline(points)
+            elif ann.kind == "note":
+                nx = int(ann.x * vw)
+                ny = int(ann.y - sb_value)
+                nw = max(80, int(ann.width * vw))
+                if ann.height < 1.0:
+                    nh = max(40, int(ann.height * vh))
+                else:
+                    nh = max(40, int(ann.height))
+                if ny + nh < -10 or ny > vh + 10:
+                    continue
+                note_rect = QRect(nx, ny, nw, nh)
+                _paint_sticky_body(
+                    painter, note_rect, ann.color, ann.text,
+                    self._font_family, self.RESIZE_HANDLE_SIZE,
+                )
 
     # ---------- displayPos 動畫 property ----------
 
@@ -1330,8 +1438,337 @@ class PrompterView(QTextEdit):
             return None
         return None
 
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        # 編輯模式 → 全交給 QTextEdit
+        if self._edit_mode:
+            super().mousePressEvent(event)
+            return
+        pos = event.position() if hasattr(event, "position") else event.pos()
+        point = QPoint(int(pos.x()), int(pos.y()))
+        # 指標工具：先檢查右下角 resize handle → 拖拉→ QTextEdit 預設
+        if self._tool == self.TOOL_POINTER:
+            if event.button() == Qt.MouseButton.LeftButton:
+                # 1) Resize handle
+                resize_note = self._find_note_resize_handle_at(point)
+                if resize_note is not None:
+                    self._resizing_note = resize_note
+                    self.viewport().setCursor(Qt.CursorShape.SizeFDiagCursor)
+                    event.accept()
+                    return
+                # 2) Note body 拖拉
+                note = self._find_note_at_viewport(point)
+                if note is not None:
+                    self._dragging_note = note
+                    sb = self.verticalScrollBar().value()
+                    vw = max(1, self.viewport().width())
+                    self._drag_offset = QPoint(
+                        int(note.x * vw) - point.x(),
+                        int(note.y - sb) - point.y(),
+                    )
+                    self.viewport().setCursor(Qt.CursorShape.ClosedHandCursor)
+                    event.accept()
+                    return
+            super().mousePressEvent(event)
+            return
+        if event.button() != Qt.MouseButton.LeftButton:
+            super().mousePressEvent(event)
+            return
+        if self._tool == self.TOOL_PENCIL:
+            self._drawing_stroke = [QPointF(point)]
+            self.viewport().update()
+            event.accept()
+            return
+        if self._tool == self.TOOL_NOTE:
+            self._add_sticky_note_at_viewport(point)
+            event.accept()
+            return
+        if self._tool == self.TOOL_ERASER:
+            if self._erase_at_viewport(point):
+                self.annotations_changed.emit()
+                self.viewport().update()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        if self._edit_mode:
+            super().mouseMoveEvent(event)
+            return
+        pos = event.position() if hasattr(event, "position") else event.pos()
+        point = QPoint(int(pos.x()), int(pos.y()))
+        # 指標 + resize 便利貼中
+        if (
+            self._tool == self.TOOL_POINTER
+            and self._resizing_note is not None
+            and (event.buttons() & Qt.MouseButton.LeftButton)
+        ):
+            sb = self.verticalScrollBar().value()
+            vw = max(1, self.viewport().width())
+            vh = max(1, self.viewport().height())
+            ann = self._resizing_note
+            # 新寬度 = (滑鼠 x - note 左邊) / vw；新高度 = (滑鼠 y - note 上邊 in viewport) / vh
+            left_px = ann.x * vw
+            top_vp = ann.y - sb
+            new_w_ratio = (point.x() - left_px) / vw
+            new_h_ratio = (point.y() - top_vp) / vh
+            ann.width = max(0.08, min(0.95, new_w_ratio))
+            ann.height = max(0.05, min(0.9, new_h_ratio))
+            self.viewport().update()
+            event.accept()
+            return
+        # 指標 + 拖拉便利貼中
+        if (
+            self._tool == self.TOOL_POINTER
+            and self._dragging_note is not None
+            and (event.buttons() & Qt.MouseButton.LeftButton)
+        ):
+            sb = self.verticalScrollBar().value()
+            vw = max(1, self.viewport().width())
+            new_left = point.x() + self._drag_offset.x()
+            new_top = point.y() + self._drag_offset.y()
+            self._dragging_note.x = max(0.0, min(0.95, new_left / vw))
+            self._dragging_note.y = float(new_top + sb)
+            self.viewport().update()
+            event.accept()
+            return
+        if self._tool == self.TOOL_POINTER:
+            super().mouseMoveEvent(event)
+            return
+        if (
+            self._tool == self.TOOL_PENCIL
+            and self._drawing_stroke
+            and (event.buttons() & Qt.MouseButton.LeftButton)
+        ):
+            self._drawing_stroke.append(QPointF(point))
+            self.viewport().update()
+            event.accept()
+            return
+        if (
+            self._tool == self.TOOL_ERASER
+            and (event.buttons() & Qt.MouseButton.LeftButton)
+        ):
+            if self._erase_at_viewport(point):
+                self.annotations_changed.emit()
+                self.viewport().update()
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        if self._edit_mode:
+            super().mouseReleaseEvent(event)
+            return
+        # 便利貼 resize 結束
+        if self._resizing_note is not None:
+            self._resizing_note = None
+            self.viewport().setCursor(Qt.CursorShape.IBeamCursor)
+            self.annotations_changed.emit()
+            self.viewport().update()
+            event.accept()
+            return
+        # 便利貼拖拉結束
+        if self._dragging_note is not None:
+            self._dragging_note = None
+            self.viewport().setCursor(Qt.CursorShape.IBeamCursor)
+            self.annotations_changed.emit()
+            self.viewport().update()
+            event.accept()
+            return
+        if self._tool == self.TOOL_POINTER:
+            super().mouseReleaseEvent(event)
+            return
+        if self._tool == self.TOOL_PENCIL and self._drawing_stroke:
+            self._finalize_pencil_stroke()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    # ---------- 內部：工具動作 ----------
+
+    def _finalize_pencil_stroke(self) -> None:
+        if not self._drawing_stroke or len(self._drawing_stroke) < 2:
+            self._drawing_stroke = []
+            return
+        sb = self.verticalScrollBar().value()
+        vw = max(1, self.viewport().width())
+        segment: list[tuple[float, float]] = []
+        for p in self._drawing_stroke:
+            rx = p.x() / vw
+            # 轉成 document Y 絕對值（加 scroll）
+            doc_y = p.y() + sb
+            segment.append((max(0.0, min(1.0, rx)), float(doc_y)))
+        # 錨定 char = 筆劃起點對應的 char
+        cur = self.cursorForPosition(
+            QPoint(int(self._drawing_stroke[0].x()), int(self._drawing_stroke[0].y()))
+        )
+        char_offset = cur.position()
+        # 合併同色/同寬的現有 stroke annotation
+        merged = False
+        for a in self._annotations:
+            if (
+                a.kind == "stroke"
+                and a.anchor == "doc"
+                and a.color == self._tool_color.name()
+                and a.stroke_width == self._tool_stroke_width
+            ):
+                a.strokes.append(segment)
+                merged = True
+                break
+        if not merged:
+            self._annotations.append(
+                Annotation(
+                    kind="stroke",
+                    anchor="doc",
+                    char_offset=char_offset,
+                    color=self._tool_color.name(),
+                    stroke_width=self._tool_stroke_width,
+                    strokes=[segment],
+                )
+            )
+        self._drawing_stroke = []
+        self.annotations_changed.emit()
+        self.viewport().update()
+
+    def _add_sticky_note_at_viewport(self, point: QPoint) -> None:
+        text, ok = QInputDialog.getMultiLineText(
+            self, "新增便利貼", "在此輸入筆記內容（Ctrl+Enter 確定）：",
+        )
+        if not ok or not text.strip():
+            return
+        sb = self.verticalScrollBar().value()
+        vw = max(1, self.viewport().width())
+        rx = point.x() / vw
+        doc_y = point.y() + sb
+        cur = self.cursorForPosition(point)
+        ann = Annotation(
+            kind="note",
+            anchor="doc",
+            char_offset=cur.position(),
+            x=max(0.0, min(0.85, rx)),
+            y=float(doc_y),
+            width=0.25,
+            height=0.1,   # 0..1 of viewport height（統一 ratio 制）
+            text=text,
+            color=self._tool_color.name(),
+        )
+        self._annotations.append(ann)
+        self.annotations_changed.emit()
+        self.viewport().update()
+
+    ERASER_RADIUS = 18
+
+    def _erase_at_viewport(self, point: QPoint) -> bool:
+        """塗抹式橡皮擦（point 為 viewport 座標）。
+        - 筆劃：擦過的點切斷 segment；剩下非空 segment 保留
+        - 便利貼：擦到就整張刪
+        回傳是否有修改。
+        """
+        sb = self.verticalScrollBar().value()
+        vw = max(1, self.viewport().width())
+        r = self.ERASER_RADIUS
+        changed = False
+        remaining: list[Annotation] = []
+        for ann in self._annotations:
+            if ann.kind == "note":
+                nx = ann.x * vw
+                ny = ann.y - sb
+                nw = max(80, ann.width * vw)
+                nh = max(40, ann.height) if ann.height >= 1 else max(
+                    40, ann.height * max(1, self.viewport().height())
+                )
+                if nx - r <= point.x() <= nx + nw + r and ny - r <= point.y() <= ny + nh + r:
+                    changed = True
+                    continue
+                remaining.append(ann)
+            elif ann.kind == "stroke":
+                new_segments: list[list[tuple[float, float]]] = []
+                for segment in ann.strokes:
+                    run: list[tuple[float, float]] = []
+                    for (xr, doc_y) in segment:
+                        px = xr * vw
+                        py = doc_y - sb
+                        if (px - point.x()) ** 2 + (py - point.y()) ** 2 <= r * r:
+                            if len(run) >= 2:
+                                new_segments.append(run)
+                            run = []
+                            changed = True
+                        else:
+                            run.append((xr, doc_y))
+                    if len(run) >= 2:
+                        new_segments.append(run)
+                    elif run:
+                        changed = True
+                if new_segments:
+                    ann.strokes = new_segments
+                    remaining.append(ann)
+                else:
+                    changed = True
+            else:
+                remaining.append(ann)
+        if changed:
+            self._annotations = remaining
+        return changed
+
+    # 右下角 resize handle 尺寸
+    RESIZE_HANDLE_SIZE = 14
+
+    def _note_rect_in_viewport(self, ann: Annotation) -> QRect:
+        """計算便利貼在 viewport 的矩形（回傳可能在視窗外）。"""
+        sb = self.verticalScrollBar().value()
+        vw = max(1, self.viewport().width())
+        vh = max(1, self.viewport().height())
+        nx = int(ann.x * vw)
+        ny = int(ann.y - sb)
+        nw = max(80, int(ann.width * vw))
+        nh = max(40, int(ann.height * vh)) if ann.height < 1.0 else max(40, int(ann.height))
+        return QRect(nx, ny, nw, nh)
+
+    def _find_note_resize_handle_at(self, point: QPoint) -> Annotation | None:
+        """點擊位置是否在某便利貼的右下角 resize handle 上。"""
+        s = self.RESIZE_HANDLE_SIZE
+        for ann in self._annotations:
+            if ann.kind != "note":
+                continue
+            r = self._note_rect_in_viewport(ann)
+            if (
+                r.right() - s <= point.x() <= r.right()
+                and r.bottom() - s <= point.y() <= r.bottom()
+            ):
+                return ann
+        return None
+
+    def _find_note_at_viewport(self, point: QPoint) -> Annotation | None:
+        """找到 viewport 座標下的便利貼（doc-anchor）。"""
+        sb = self.verticalScrollBar().value()
+        vw = max(1, self.viewport().width())
+        for ann in self._annotations:
+            if ann.kind != "note":
+                continue
+            nx = ann.x * vw
+            ny = ann.y - sb
+            nw = max(80, ann.width * vw)
+            nh = max(40, ann.height) if ann.height >= 1 else max(
+                40, ann.height * max(1, self.viewport().height())
+            )
+            if nx <= point.x() <= nx + nw and ny <= point.y() <= ny + nh:
+                return ann
+        return None
+
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
         pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+        # 指標模式下雙擊便利貼 → 編輯文字
+        if self._tool == self.TOOL_POINTER and not self._edit_mode:
+            note = self._find_note_at_viewport(pos)
+            if note is not None:
+                new_text, ok = QInputDialog.getMultiLineText(
+                    self, "編輯便利貼", "修改內容：", note.text,
+                )
+                if ok:
+                    note.text = new_text
+                    self.annotations_changed.emit()
+                    self.viewport().update()
+                event.accept()
+                return
         # 點到右欄 slide → 發 slide_double_clicked signal
         page_no = self._page_at_viewport_pos(pos.x(), pos.y())
         if page_no is not None:

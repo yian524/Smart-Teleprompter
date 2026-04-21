@@ -32,6 +32,20 @@ class SlidePage:
     height_pt: float
 
 
+@dataclass
+class TextBlock:
+    """PDF 頁面上的文字區塊 — bbox 以 PDF points 表示（原始座標系）。
+    x0,y0 = 左上、x1,y1 = 右下。text = 該區塊的文字內容。
+    縮放到畫面時：pixel_x = pdf_x * (pix_w / page.width_pt)
+    """
+
+    x0: float
+    y0: float
+    x1: float
+    y1: float
+    text: str
+
+
 class SlideDeck:
     """一份投影片 = PDF 檔案的抽象；延遲開檔、LRU 快取渲染結果。"""
 
@@ -42,6 +56,7 @@ class SlideDeck:
         self._render_cache: dict[tuple[int, int], QPixmap] = {}
         self._render_order: list[tuple[int, int]] = []
         self._thumb_cache: dict[int, QPixmap] = {}
+        self._text_block_cache: dict[int, list[TextBlock]] = {}
 
     @property
     def pages(self) -> list[SlidePage]:
@@ -90,6 +105,37 @@ class SlideDeck:
             self._render_cache.pop(old, None)
         return pix
 
+    def get_text_blocks(self, page_no: int) -> list[TextBlock]:
+        """回傳該頁的文字 block 列表（bbox + text）。座標為 PDF points。
+
+        用於實作「投影片可選取文字」功能：呼叫端把 bbox 乘以 scale
+        得到螢幕座標，做 hit-testing。
+        """
+        self._ensure_open()
+        if page_no < 1 or page_no > len(self._pages):
+            return []
+        cached = self._text_block_cache.get(page_no)
+        if cached is not None:
+            return cached
+        page = self._doc[page_no - 1]
+        blocks: list[TextBlock] = []
+        # fitz "words": list of (x0, y0, x1, y1, word, block_no, line_no, word_no)
+        try:
+            words = page.get_text("words")
+        except Exception:
+            words = []
+        for w in words:
+            if len(w) >= 5 and w[4].strip():
+                blocks.append(
+                    TextBlock(
+                        x0=float(w[0]), y0=float(w[1]),
+                        x1=float(w[2]), y1=float(w[3]),
+                        text=str(w[4]),
+                    )
+                )
+        self._text_block_cache[page_no] = blocks
+        return blocks
+
     def thumbnail(self, page_no: int) -> Optional[QPixmap]:
         """取縮圖；低解析度常駐快取。"""
         self._ensure_open()
@@ -132,6 +178,7 @@ class SlideDeck:
         self._render_cache.clear()
         self._render_order.clear()
         self._thumb_cache.clear()
+        self._text_block_cache.clear()
 
 
 def load_slide_deck(path: str | Path) -> SlideDeck:

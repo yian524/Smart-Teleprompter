@@ -469,6 +469,11 @@ class MainWindow(QMainWindow):
         self.view.position_clicked.connect(self._on_view_clicked)
         # 投影片模式下的方向鍵由 SlideModeView 發出
         self.slide_mode_view.page_navigate_requested.connect(self._navigate_page)
+        # 標註變動 → 存到 active session（session_manager 會寫到 sessions.json）
+        self.slide_mode_view.annotations_changed.connect(self._on_annotations_changed)
+        self.view.annotations_changed.connect(self._on_annotations_changed)
+        # 選字複製 → 顯示在狀態列
+        self.slide_mode_view.text_copied.connect(self._on_text_copied_from_slide)
         # 左側縮圖列：點縮圖跳頁、方向鍵逐頁、收合按鈕
         self.slide_preview.page_requested.connect(self._on_slide_page_requested)
         self.slide_preview.page_navigate_requested.connect(self._navigate_page)
@@ -680,6 +685,88 @@ class MainWindow(QMainWindow):
         except ValueError:
             self._toolbar_primary_acts = all_acts
             self._toolbar_secondary_acts = []
+
+        # === 標註工具列（鉛筆/便利貼/橡皮擦/選字）— 獨立一條，常駐顯示不會被 overflow 吃掉 ===
+        self.annotation_toolbar = QToolBar("標註工具", self)
+        self.annotation_toolbar.setMovable(False)
+        self.addToolBarBreak()
+        self.addToolBar(self.annotation_toolbar)
+
+        # ↖ 游標
+        self.act_tool_pointer = QAction("↖ 游標", self)
+        self.act_tool_pointer.setToolTip("一般游標（編輯/選取/跳位）(V)")
+        self.act_tool_pointer.setCheckable(True)
+        self.act_tool_pointer.setChecked(True)
+        self.act_tool_pointer.triggered.connect(lambda: self._set_annotation_tool("pointer"))
+        self.annotation_toolbar.addAction(self.act_tool_pointer)
+
+        self.annotation_toolbar.addSeparator()
+
+        # 🖊 鉛筆 + 🎨 顏色（放在鉛筆正旁邊）
+        self.act_tool_pencil = QAction("🖊 鉛筆", self)
+        self.act_tool_pencil.setToolTip("在講稿或投影片上畫重點 (P)")
+        self.act_tool_pencil.setCheckable(True)
+        self.act_tool_pencil.triggered.connect(lambda: self._set_annotation_tool("pencil"))
+        self.annotation_toolbar.addAction(self.act_tool_pencil)
+
+        self._current_color = "#FFEB3B"
+        self._color_preset_btns: list[QToolButton] = []
+        for color, tip in (
+            ("#FFEB3B", "黃 (Yellow)"),
+            ("#F44336", "紅 (Red)"),
+            ("#2196F3", "藍 (Blue)"),
+        ):
+            btn = QToolButton()
+            btn.setToolTip(tip)
+            btn.setFixedSize(22, 22)
+            btn.setStyleSheet(
+                f"QToolButton {{ background: {color}; border: 2px solid #3A3A3A; border-radius: 11px; }}"
+                f"QToolButton:checked {{ border: 2px solid #FFFFFF; }}"
+            )
+            btn.setCheckable(True)
+            btn.clicked.connect(lambda _c=False, col=color: self._set_annotation_color(col))
+            self._color_preset_btns.append(btn)
+            self.annotation_toolbar.addWidget(btn)
+        self._color_preset_btns[0].setChecked(True)
+
+        self.btn_color_custom = QToolButton()
+        self.btn_color_custom.setText("🎨")
+        self.btn_color_custom.setToolTip("自訂顏色…")
+        self.btn_color_custom.clicked.connect(self._pick_custom_color)
+        self.annotation_toolbar.addWidget(self.btn_color_custom)
+
+        self.annotation_toolbar.addSeparator()
+
+        # 🗒 便利貼
+        self.act_tool_note = QAction("🗒 便利貼", self)
+        self.act_tool_note.setToolTip("插入便利貼筆記 (N)")
+        self.act_tool_note.setCheckable(True)
+        self.act_tool_note.triggered.connect(lambda: self._set_annotation_tool("note"))
+        self.annotation_toolbar.addAction(self.act_tool_note)
+
+        self.annotation_toolbar.addSeparator()
+
+        # 🧽 橡皮擦 + 🧹 清除本頁
+        self.act_tool_eraser = QAction("🧽 橡皮擦", self)
+        self.act_tool_eraser.setToolTip("塗抹式刪除標註 (E)")
+        self.act_tool_eraser.setCheckable(True)
+        self.act_tool_eraser.triggered.connect(lambda: self._set_annotation_tool("eraser"))
+        self.annotation_toolbar.addAction(self.act_tool_eraser)
+
+        self.act_clear_page = QAction("🧹 清除本頁", self)
+        self.act_clear_page.setToolTip("一鍵清除當前頁所有標註（含筆劃 + 便利貼）")
+        self.act_clear_page.triggered.connect(self._clear_current_page_annotations)
+        self.annotation_toolbar.addAction(self.act_clear_page)
+
+        # 工具互斥（不含 clear_page；選字改成指標模式下自動偵測 PDF 文字）
+        from PySide6.QtGui import QActionGroup
+        self._tool_group = QActionGroup(self)
+        self._tool_group.setExclusive(True)
+        for a in (
+            self.act_tool_pointer, self.act_tool_pencil,
+            self.act_tool_note, self.act_tool_eraser,
+        ):
+            self._tool_group.addAction(a)
 
         # 第二條工具列：編輯專用（編輯模式開啟才顯示）
         self.edit_toolbar = QToolBar("編輯工具列", self)
@@ -904,6 +991,11 @@ class MainWindow(QMainWindow):
         self.view.set_slide_deck(session.slide_deck)
         if session.slide_deck is not None:
             self._sync_slide_to_current_sentence()
+
+        # 還原標註（doc 錨點給 PrompterView；slide 錨點在 _set_view_mode("slide") 時載入）
+        self.view.set_annotations(
+            [a for a in session.annotations if a.anchor == "doc"]
+        )
 
         # 還原檢視模式（放最後，因為 _set_view_mode 會根據 session.slide_deck 決定縮圖列內容）
         self._set_view_mode(session.view_mode or "split")
@@ -1731,6 +1823,106 @@ class MainWindow(QMainWindow):
             target.addAction(a)
         tb2.setVisible(is_portrait)
 
+    def _clear_current_page_annotations(self) -> None:
+        """清除當前檢視的所有標註（slide mode 清該 slide 頁；其他模式清所有 doc 錨點）。"""
+        from PySide6.QtWidgets import QMessageBox
+        if self._view_mode == "slide":
+            target_page = self.slide_mode_view.current_page() + 1
+            # 找該 slide_page 有多少 annotations
+            existing = [
+                a for a in self.slide_mode_view.annotations()
+                if a.anchor == "slide" and a.slide_page == target_page
+            ]
+            if not existing:
+                self.status_recognized.setText("本頁沒有標註可清除")
+                return
+            ret = QMessageBox.question(
+                self, "清除本頁標註",
+                f"確定清除第 {target_page} 頁的 {len(existing)} 個標註嗎？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if ret != QMessageBox.StandardButton.Yes:
+                return
+            kept = [
+                a for a in self.slide_mode_view.annotations()
+                if not (a.anchor == "slide" and a.slide_page == target_page)
+            ]
+            self.slide_mode_view.set_annotations(kept)
+            self.slide_mode_view.annotations_changed.emit()
+            self.status_recognized.setText(f"🧹 已清除第 {target_page} 頁的 {len(existing)} 個標註")
+        else:
+            # transcript / split：清所有 doc 錨點
+            existing = self.view.annotations()
+            if not existing:
+                self.status_recognized.setText("沒有講稿標註可清除")
+                return
+            ret = QMessageBox.question(
+                self, "清除講稿標註",
+                f"確定清除講稿上所有 {len(existing)} 個標註嗎？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if ret != QMessageBox.StandardButton.Yes:
+                return
+            self.view.set_annotations([])
+            self.view.annotations_changed.emit()
+            self.status_recognized.setText(f"🧹 已清除 {len(existing)} 個講稿標註")
+
+    def _set_annotation_color(self, color: str) -> None:
+        """設定鉛筆/便利貼顏色，派送到兩個 view。"""
+        self._current_color = color
+        # 同步預設按鈕 checked 狀態
+        if hasattr(self, "_color_preset_btns"):
+            for btn in self._color_preset_btns:
+                c = btn.styleSheet().split("background:")[1].split(";")[0].strip()
+                btn.blockSignals(True)
+                btn.setChecked(c.lower() == color.lower())
+                btn.blockSignals(False)
+        self.view.set_tool_color(color)
+        self.slide_mode_view.set_tool_color(color)
+
+    def _pick_custom_color(self) -> None:
+        """彈 QColorDialog 讓使用者挑顏色。"""
+        from PySide6.QtGui import QColor
+        from PySide6.QtWidgets import QColorDialog
+        col = QColorDialog.getColor(QColor(self._current_color), self, "選擇顏色")
+        if col.isValid():
+            self._set_annotation_color(col.name())
+            # 任何預設按鈕的 check 都取消（因為是自訂色）
+            for btn in self._color_preset_btns:
+                btn.blockSignals(True); btn.setChecked(False); btn.blockSignals(False)
+
+    def _set_annotation_tool(self, tool: str) -> None:
+        """把標註工具派送給 PrompterView + SlideModeView。
+
+        tool: "pointer" | "pencil" | "note" | "eraser"
+        指標模式下，若在 slide 區域拖曳則自動啟動 PDF 文字選取（Word 風格），
+        Ctrl+C 複製。不需要獨立的選字 tool。
+        """
+        self.view.set_tool(tool)
+        self.slide_mode_view.set_tool(tool)
+
+    def _on_text_copied_from_slide(self, text: str) -> None:
+        """投影片上的文字被複製 → status bar 提示。"""
+        preview = text[:30] + ("…" if len(text) > 30 else "")
+        self.status_recognized.setText(f"📋 已複製 {len(text)} 字：「{preview}」")
+
+    def _on_annotations_changed(self) -> None:
+        """兩個 view 的標註都存回 session；分 anchor 合併。"""
+        active = self.session_manager.active
+        if active is None:
+            return
+        slide_anns = [
+            a for a in self.slide_mode_view.annotations() if a.anchor == "slide"
+        ]
+        doc_anns = [a for a in self.view.annotations() if a.anchor == "doc"]
+        active.annotations = slide_anns + doc_anns
+        try:
+            self.session_manager.save_to_disk(default_sessions_path())
+        except Exception as e:
+            logger.warning("存 sessions.json 失敗：%s", e)
+
     def _toggle_layout_swap(self) -> None:
         """對調文字/投影片位置（SlideModeView 支援；記到 session）。"""
         self._layout_swapped = not self._layout_swapped
@@ -1782,6 +1974,14 @@ class MainWindow(QMainWindow):
                 self.slide_mode_view.set_format_spans(self.view.dump_format_spans())
             except Exception:
                 pass
+            # 載入已儲存的標註（slide 錨點給 slide_mode_view、doc 錨點給 view）
+            if active is not None:
+                self.slide_mode_view.set_annotations(
+                    [a for a in active.annotations if a.anchor == "slide"]
+                )
+                self.view.set_annotations(
+                    [a for a in active.annotations if a.anchor == "doc"]
+                )
             self.slide_mode_view.set_current_page(self._current_page_idx())
             # 還原版面對調狀態
             swap = active.layout_swapped if active is not None else False

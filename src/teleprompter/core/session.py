@@ -22,6 +22,7 @@ from typing import Any, Optional
 from PySide6.QtCore import QObject, Signal
 
 from .alignment_engine import AlignmentEngine
+from .annotations import Annotation
 from .pdf_renderer import SlideDeck
 from .rich_text_format import FormatSpan
 from .transcript_loader import Transcript
@@ -53,6 +54,8 @@ class Session:
     thumbnail_panel_width: int = 200
     # 版面對調（橫屏左右互換 / 直屏上下互換）
     layout_swapped: bool = False
+    # 投影片上的標註（便利貼 + 鉛筆畫）
+    annotations: list[Annotation] = field(default_factory=list)
 
     # runtime（不持久化）
     transcript: Optional[Transcript] = field(default=None, compare=False, repr=False)
@@ -75,6 +78,7 @@ class Session:
             "view_mode": self.view_mode,
             "thumbnail_panel_width": self.thumbnail_panel_width,
             "layout_swapped": self.layout_swapped,
+            "annotations": [a.to_dict() for a in self.annotations],
         }
 
     @classmethod
@@ -95,6 +99,7 @@ class Session:
             view_mode=data.get("view_mode", "split"),
             thumbnail_panel_width=int(data.get("thumbnail_panel_width", 200)),
             layout_swapped=bool(data.get("layout_swapped", False)),
+            annotations=[Annotation.from_dict(a) for a in data.get("annotations", [])],
         )
 
 
