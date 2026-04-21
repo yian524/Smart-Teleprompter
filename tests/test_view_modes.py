@@ -343,14 +343,13 @@ def test_main_toolbar_splits_into_two_rows_in_portrait(main_window):
     main_window._apply_orientation_layout()
     assert tb2.isVisible()
     assert len([a for a in tb2.actions() if not a.isSeparator()]) > 0
-    # tb1 只剩 primary（含檔案 + 播放區），不含字級 / 編輯 / 錄影等
+    # tb1 只剩 primary（含檔案 + 播放區），不含字級 / 錄影等
+    # （act_edit_mode 已移到 annotation_toolbar，不在主工具列）
     tb1_acts = [a for a in tb1.actions() if not a.isSeparator()]
-    assert main_window.act_edit_mode not in tb1_acts
     assert main_window.act_record not in tb1_acts
     assert main_window.act_settings not in tb1_acts
     # tb2 含這些
     tb2_acts = tb2.actions()
-    assert main_window.act_edit_mode in tb2_acts
     assert main_window.act_record in tb2_acts
     assert main_window.act_settings in tb2_acts
 

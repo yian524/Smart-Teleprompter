@@ -140,13 +140,14 @@ def test_compact_whitespace_rejected(main_window, tmp_path, app, monkeypatch):
 # ---- edit_toolbar 永遠可見 ----
 
 
-def test_edit_toolbar_always_visible(main_window):
-    """edit_toolbar 在任何模式都應可見。"""
-    assert main_window.edit_toolbar.isVisible()
-    main_window.view.set_edit_mode(True)
-    assert main_window.edit_toolbar.isVisible()
-    main_window.view.set_edit_mode(False)
-    assert main_window.edit_toolbar.isVisible()
+def test_edit_actions_on_annotation_toolbar(main_window):
+    """編輯 actions 已併入 annotation_toolbar；edit_toolbar 被停用。"""
+    anno = main_window.annotation_toolbar.actions()
+    assert main_window.act_edit_mode in anno
+    assert main_window.act_bold in anno
+    assert main_window.act_insert_annotation in anno
+    # 原 edit_toolbar 改為隱藏
+    assert not main_window.edit_toolbar.isVisible()
 
 
 def test_all_edit_actions_always_enabled(main_window):

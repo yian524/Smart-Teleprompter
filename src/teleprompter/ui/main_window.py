@@ -636,11 +636,12 @@ class MainWindow(QMainWindow):
         tb.addSeparator()
 
         # === 模式區 ===
+        # 編輯模式 toggle 移到 annotation_toolbar（跟文字工具放一起）
         self.act_edit_mode = QAction("✏ 編輯模式", self)
         self.act_edit_mode.setShortcut("Ctrl+E")
         self.act_edit_mode.setCheckable(True)
         self.act_edit_mode.toggled.connect(self._toggle_edit_mode)
-        tb.addAction(self.act_edit_mode)
+        # 注意：稍後在 annotation_toolbar 中 addAction，不放主工具列
 
         self.act_qa_mode = QAction("🎤 Q&A 模式", self)
         self.act_qa_mode.setShortcut("Ctrl+Q")
@@ -777,7 +778,56 @@ class MainWindow(QMainWindow):
         self.act_clear_page.triggered.connect(self._clear_current_page_annotations)
         self.annotation_toolbar.addAction(self.act_clear_page)
 
-        # 工具互斥（不含 clear_page；選字改成指標模式下自動偵測 PDF 文字）
+        # ── 文字工具分群（編輯模式 + 格式 + 結構）──
+        self.annotation_toolbar.addSeparator()
+        self.annotation_toolbar.addAction(self.act_edit_mode)
+
+        # B / I / U（格式類，直接作用於選取，永遠可用）
+        self.act_bold = QAction("B", self)
+        self.act_bold.setToolTip("粗體 (Ctrl+B)")
+        self.act_bold.setShortcut("Ctrl+B")
+        self.act_bold.triggered.connect(self.view.toggle_bold)
+        self.annotation_toolbar.addAction(self.act_bold)
+
+        self.act_italic = QAction("I", self)
+        self.act_italic.setToolTip("斜體 (Ctrl+I)")
+        self.act_italic.setShortcut("Ctrl+I")
+        self.act_italic.triggered.connect(self.view.toggle_italic)
+        self.annotation_toolbar.addAction(self.act_italic)
+
+        self.act_underline = QAction("U", self)
+        self.act_underline.setToolTip("底線 (Ctrl+U)")
+        self.act_underline.setShortcut("Ctrl+U")
+        self.act_underline.triggered.connect(self.view.toggle_underline)
+        self.annotation_toolbar.addAction(self.act_underline)
+
+        self.act_clear_fmt = QAction("✖格式", self)
+        self.act_clear_fmt.setToolTip("清除選取範圍的格式 (Ctrl+\\)")
+        self.act_clear_fmt.setShortcut("Ctrl+\\")
+        self.act_clear_fmt.triggered.connect(self.view.clear_format)
+        self.annotation_toolbar.addAction(self.act_clear_fmt)
+
+        self.act_clear_all_fmt = QAction("❌ 清文字格式", self)
+        self.act_clear_all_fmt.setToolTip(
+            "清除整篇文字的粗體/斜體/底線/螢光筆格式（會跳確認視窗）"
+        )
+        self.act_clear_all_fmt.triggered.connect(self._clear_all_formatting)
+        self.annotation_toolbar.addAction(self.act_clear_all_fmt)
+
+        self.annotation_toolbar.addSeparator()
+
+        # 結構類（會改動講稿文字，按下彈確認視窗）
+        self.act_insert_annotation = QAction("💬 插入註解", self)
+        self.act_insert_annotation.setToolTip("⚠ 會改動講稿文字：在游標位置插入備忘註解")
+        self.act_insert_annotation.triggered.connect(self._insert_annotation)
+        self.annotation_toolbar.addAction(self.act_insert_annotation)
+
+        self.act_compact_ws = QAction("🧹 清理空白", self)
+        self.act_compact_ws.setToolTip("⚠ 會改動講稿文字：移除多餘空白行與行尾空白")
+        self.act_compact_ws.triggered.connect(self._compact_whitespace)
+        self.annotation_toolbar.addAction(self.act_compact_ws)
+
+        # 工具互斥（不含 clear_page / edit_mode；選字改成指標模式下自動偵測 PDF 文字）
         from PySide6.QtGui import QActionGroup
         self._tool_group = QActionGroup(self)
         self._tool_group.setExclusive(True)
@@ -787,61 +837,11 @@ class MainWindow(QMainWindow):
         ):
             self._tool_group.addAction(a)
 
-        # 第二條工具列：編輯專用（編輯模式開啟才顯示）
-        self.edit_toolbar = QToolBar("編輯工具列", self)
+        # （原獨立的 edit_toolbar 已合併到 annotation_toolbar；保留空的 edit_toolbar
+        #   作為測試與舊參考的 no-op 容器）
+        self.edit_toolbar = QToolBar("編輯工具列（已併入上方）", self)
         self.edit_toolbar.setMovable(False)
-        self.addToolBarBreak()   # 另起一行
-        self.addToolBar(self.edit_toolbar)
-
-        # ── 結構區（會改動講稿文字，點擊會先彈確認視窗）──
-        self.act_insert_annotation = QAction("💬 插入註解", self)
-        self.act_insert_annotation.setToolTip("⚠ 會改動講稿文字：在游標位置插入備忘註解")
-        self.act_insert_annotation.triggered.connect(self._insert_annotation)
-        self.edit_toolbar.addAction(self.act_insert_annotation)
-
-        self.act_compact_ws = QAction("🧹 清理空白", self)
-        self.act_compact_ws.setToolTip("⚠ 會改動講稿文字：移除多餘空白行與行尾空白")
-        self.act_compact_ws.triggered.connect(self._compact_whitespace)
-        self.edit_toolbar.addAction(self.act_compact_ws)
-
-        self.edit_toolbar.addSeparator()
-        # ── 格式區（只改視覺樣式，不動文字；直接執行不確認）──
-
-        self.act_bold = QAction("B", self)
-        self.act_bold.setToolTip("粗體 (Ctrl+B)")
-        self.act_bold.setShortcut("Ctrl+B")
-        self.act_bold.triggered.connect(self.view.toggle_bold)
-        self.edit_toolbar.addAction(self.act_bold)
-
-        self.act_italic = QAction("I", self)
-        self.act_italic.setToolTip("斜體 (Ctrl+I)")
-        self.act_italic.setShortcut("Ctrl+I")
-        self.act_italic.triggered.connect(self.view.toggle_italic)
-        self.edit_toolbar.addAction(self.act_italic)
-
-        self.act_underline = QAction("U", self)
-        self.act_underline.setToolTip("底線 (Ctrl+U)")
-        self.act_underline.setShortcut("Ctrl+U")
-        self.act_underline.triggered.connect(self.view.toggle_underline)
-        self.edit_toolbar.addAction(self.act_underline)
-
-        # 螢光筆已移到 annotation_toolbar（鉛筆旁邊，共用顏色）
-
-        self.act_clear_fmt = QAction("✖格式", self)
-        self.act_clear_fmt.setToolTip("清除選取範圍的格式 (Ctrl+\\)")
-        self.act_clear_fmt.setShortcut("Ctrl+\\")
-        self.act_clear_fmt.triggered.connect(self.view.clear_format)
-        self.edit_toolbar.addAction(self.act_clear_fmt)
-
-        self.act_clear_all_fmt = QAction("❌ 清文字格式", self)
-        self.act_clear_all_fmt.setToolTip(
-            "清除整篇文字的粗體/斜體/底線/螢光筆格式（不影響畫在畫面上的鉛筆/便利貼）。"
-        )
-        self.act_clear_all_fmt.triggered.connect(self._clear_all_formatting)
-        self.edit_toolbar.addAction(self.act_clear_all_fmt)
-
-        # edit_toolbar 永遠顯示、所有 action 永遠 enabled
-        # （格式類直接作用於選取；結構類會彈確認視窗）
+        self.edit_toolbar.hide()
 
         # 編輯模式切換時重設結果（MD 重新 parse）
         self.view.text_edited.connect(self._on_transcript_edited)

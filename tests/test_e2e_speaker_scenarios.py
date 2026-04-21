@@ -424,28 +424,18 @@ def test_edit_exit_preserves_position_and_format(mw, sample_transcript, app):
     )
 
 
-def test_edit_toolbar_always_visible_and_enabled(mw, sample_transcript, app):
-    """編輯工具列永遠可見、所有 action 永遠啟用。
-
-    （格式類直接作用於選取、結構類點擊會彈確認視窗；不再綁 edit_mode。）
-    """
+def test_edit_actions_merged_into_annotation_toolbar(mw, sample_transcript, app):
+    """編輯 actions 已併入 annotation_toolbar；所有 action 永遠啟用。"""
     mw.load_file(str(sample_transcript))
     app.processEvents()
-    assert not mw.view.is_edit_mode()
-    # 非編輯模式仍可見
-    assert mw.edit_toolbar.isVisible(), "edit_toolbar 應永遠顯示"
+    # 原 edit_toolbar 已清空（兼容屬性仍存在）
+    anno_actions = mw.annotation_toolbar.actions()
     for act in (mw.act_bold, mw.act_italic, mw.act_underline,
                 mw.act_highlight, mw.act_clear_fmt, mw.act_clear_all_fmt,
-                mw.act_insert_annotation, mw.act_compact_ws):
+                mw.act_insert_annotation, mw.act_compact_ws,
+                mw.act_edit_mode):
+        assert act in anno_actions, f"{act.text()} 應在 annotation_toolbar"
         assert act.isEnabled(), f"{act.text()} 應永遠啟用"
-    # 進編輯模式也是
-    mw.view.set_edit_mode(True)
-    app.processEvents()
-    assert mw.edit_toolbar.isVisible()
-    for act in (mw.act_bold, mw.act_italic, mw.act_underline,
-                mw.act_highlight, mw.act_clear_fmt,
-                mw.act_insert_annotation, mw.act_compact_ws):
-        assert act.isEnabled()
 
 
 # ============================================================
