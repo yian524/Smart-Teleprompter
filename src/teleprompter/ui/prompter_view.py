@@ -108,6 +108,8 @@ class PrompterView(QTextEdit):
         self._page_boundaries: list[tuple[int, int]] = []
         # 文字寬度占比（使用者可拖拉調整）
         self._text_width_ratio = self._DEFAULT_TEXT_WIDTH_RATIO
+        # 文圖位置對調：False = 左文右圖（預設）；True = 左圖右文
+        self._layout_swapped: bool = False
         # 文 / 圖拖拉分隔條：狀態 + 滑鼠追蹤
         self._split_hover = False
         self._split_dragging = False
@@ -1067,11 +1069,41 @@ class PrompterView(QTextEdit):
         is_portrait = vw < vh
         if self._slide_deck is None or is_portrait:
             self.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
+            self._apply_block_left_margin(0)
             return
         self.setLineWrapMode(QTextEdit.LineWrapMode.FixedPixelWidth)
         w = max(200, int(vw * self._text_width_ratio))
         self.setLineWrapColumnOrWidth(w)
-        self._split_line_x = int(vw * self._text_width_ratio)
+        if self._layout_swapped:
+            # 左圖右文：split line 在 vw - w 處；所有 block 左邊縮進 vw - w 讓文字靠右
+            self._split_line_x = vw - w
+            self._apply_block_left_margin(vw - w)
+        else:
+            # 左文右圖（預設）：split line 在 w 處；文字從 x=0 開始
+            self._split_line_x = w
+            self._apply_block_left_margin(0)
+
+    def _apply_block_left_margin(self, left_margin: int) -> None:
+        """將所有 block 的 leftMargin 設為 left_margin（讓文字整體往右偏移）。"""
+        doc = self.document()
+        block = doc.firstBlock()
+        while block.isValid():
+            cursor = QTextCursor(block)
+            bf = cursor.blockFormat()
+            if int(bf.leftMargin()) != int(left_margin):
+                bf.setLeftMargin(left_margin)
+                cursor.setBlockFormat(bf)
+            block = block.next()
+
+    def set_layout_swapped(self, swapped: bool) -> None:
+        """切換文圖位置：False 左文右圖（預設）；True 左圖右文。"""
+        swapped = bool(swapped)
+        if self._layout_swapped == swapped:
+            return
+        self._layout_swapped = swapped
+        self._apply_text_wrap_width()
+        self._relayout_slide_gaps()
+        self.viewport().update()
 
     def _split_line_hit_range(self) -> tuple[int, int]:
         """返回分隔線可點擊的 x 範圍（左右各 6px 容錯）。"""
@@ -1115,7 +1147,9 @@ class PrompterView(QTextEdit):
             if self._split_dragging:
                 vw = self.viewport().width()
                 if vw > 0:
-                    ratio = max(0.28, min(0.82, x / vw))
+                    # swap 模式下：split line 在 vw - text_w 處 → 文字寬 = vw - x
+                    raw = (vw - x) / vw if self._layout_swapped else x / vw
+                    ratio = max(0.28, min(0.82, raw))
                     if abs(ratio - self._text_width_ratio) > 0.005:
                         self._text_width_ratio = ratio
                         self._apply_text_wrap_width()
@@ -1178,8 +1212,11 @@ class PrompterView(QTextEdit):
         page = self._slide_deck.pages[page_no - 1]
         aspect = page.height_pt / page.width_pt if page.width_pt > 0 else 1.414
         slide_h = int(right_area_w * aspect)
-        # 水平置中於右欄
-        slide_x = text_w + pad
+        # 預設右欄；swap 時改到左欄
+        if self._layout_swapped:
+            slide_x = pad
+        else:
+            slide_x = text_w + pad
         return (slide_x, 0, right_area_w, slide_h)
 
     def _page_top_block(self, page_index_0based: int):

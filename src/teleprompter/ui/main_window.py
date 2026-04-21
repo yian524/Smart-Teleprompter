@@ -2121,9 +2121,10 @@ class MainWindow(QMainWindow):
             logger.warning("存 sessions.json 失敗：%s", e)
 
     def _toggle_layout_swap(self) -> None:
-        """對調文字/投影片位置（SlideModeView 支援；記到 session）。"""
+        """對調文字/投影片位置（SlideModeView + PrompterView 嵌入式兩者都切換）。"""
         self._layout_swapped = not self._layout_swapped
         self.slide_mode_view.set_layout_swapped(self._layout_swapped)
+        self.view.set_layout_swapped(self._layout_swapped)
         # 按鈕顯示當前狀態（⇆ / ⇄）
         self.btn_swap_layout.setText("⇄" if self._layout_swapped else "⇆")
         active = self.session_manager.active
@@ -2194,6 +2195,7 @@ class MainWindow(QMainWindow):
         swap = active.layout_swapped if active is not None else False
         self._layout_swapped = swap
         self.slide_mode_view.set_layout_swapped(swap)
+        self.view.set_layout_swapped(swap)
         if hasattr(self, "btn_swap_layout"):
             self.btn_swap_layout.setText("⇄" if swap else "⇆")
         self._content_stack.setCurrentIndex(1)
