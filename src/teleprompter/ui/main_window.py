@@ -495,6 +495,8 @@ class MainWindow(QMainWindow):
         self.sb_font_size.setValue(self.cfg.font_size)
         self.sb_font_size.setSuffix(" pt")
         self.sb_font_size.setToolTip("字型大小")
+        self.sb_font_size.setMaximumWidth(80)
+        self.sb_font_size.setFixedWidth(80)
         self.sb_font_size.valueChanged.connect(self._on_font_size_spinbox)
         tb.addWidget(self.sb_font_size)
 
@@ -520,9 +522,11 @@ class MainWindow(QMainWindow):
         self.sb_target_min.setRange(1, 180)
         self.sb_target_min.setSuffix(" 分")
         self.sb_target_min.setValue(max(1, self.cfg.target_duration_sec // 60 or 15))
-        self.sb_target_min.setVisible(self.cb_target.isChecked())
+        self.sb_target_min.setFixedWidth(80)
         self.sb_target_min.valueChanged.connect(self._on_target_minutes_changed)
-        tb.addWidget(self.sb_target_min)
+        # 存取 QToolBar 包裝後的 QAction，控制 visibility 才可靠
+        self._sb_target_min_action = tb.addWidget(self.sb_target_min)
+        self._sb_target_min_action.setVisible(self.cb_target.isChecked())
 
         # 📍 回到念稿位置
         self.act_goto_speech = QAction("📍 回到念稿位置", self)
@@ -1839,7 +1843,8 @@ class MainWindow(QMainWindow):
             self.sb_font_size.blockSignals(False)
 
     def _on_target_toggled(self, checked: bool) -> None:
-        self.sb_target_min.setVisible(checked)
+        # 用 QAction 控制 visibility 才可靠（setVisible on widget 在 QToolBar 內不穩定）
+        self._sb_target_min_action.setVisible(checked)
         if checked:
             minutes = self.sb_target_min.value()
             self.timer_ctrl.set_target_seconds(minutes * 60)
