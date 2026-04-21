@@ -865,12 +865,11 @@ class PrompterView(QTextEdit):
                         painter.setPen(QColor("#80D8FF"))
                         painter.drawText(tx, ty, label)
 
-            # 3) 文圖分隔條（貫穿整個 viewport，畫在最上層）
-            if self._slide_deck is not None:
+            # 3) 文圖分隔條：只在 hover / 拖曳時顯示
+            if self._slide_deck is not None and (self._split_hover or self._split_dragging):
                 x = self._split_line_x
                 color = self._current_split_color()
-                # 拖拉中加粗，方便辨識
-                width = 4 if (self._split_dragging or self._split_hover) else 2
+                width = 4
                 painter.fillRect(x - width // 2, 0, width, vh, color)
         finally:
             painter.end()
