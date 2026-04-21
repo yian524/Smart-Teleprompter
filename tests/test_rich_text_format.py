@@ -96,13 +96,27 @@ def test_roundtrip_restore(qt_app):
     assert spans == spans2
 
 
-def test_restore_clips_out_of_range(qt_app):
+def test_restore_drops_out_of_range(qt_app):
+    """end 遠大於 text_len（>1.05x）的 span 直接丟棄，不夾到 text_len。
+
+    理由：若使用者剛套 biuh 到選取，textCursor 上的 charFormat 會繼承 biuh；
+    此時若有壞 span 被「夾」到整篇，會污染所有字元。統一丟棄避免擴散。
+    """
     from teleprompter.core.rich_text_format import FormatSpan, restore_formats, dump_formats
     doc = _make_doc("short")  # len=5
     restore_formats(doc, [FormatSpan(start=0, end=100, bold=True)])
     spans = dump_formats(doc)
+    assert spans == [], "out-of-range span 應該被丟棄不套用"
+
+
+def test_restore_in_range_still_applied(qt_app):
+    """正常 in-range span 仍正常套用。"""
+    from teleprompter.core.rich_text_format import FormatSpan, restore_formats, dump_formats
+    doc = _make_doc("hello world")  # len=11
+    restore_formats(doc, [FormatSpan(start=0, end=5, bold=True)])
+    spans = dump_formats(doc)
     assert len(spans) == 1
-    assert spans[0].start == 0 and spans[0].end == 5
+    assert spans[0].start == 0 and spans[0].end == 5 and spans[0].bold
 
 
 def test_spans_multiline_block(qt_app):

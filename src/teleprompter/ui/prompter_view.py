@@ -127,6 +127,13 @@ class PrompterView(QTextEdit):
     # ---------- 公開 API ----------
 
     def set_text(self, full_text: str) -> None:
+        # setPlainText 會繼承 widget textCursor 目前的 charFormat → 若使用者剛 merge 了
+        # bold/italic/underline/highlight，整篇新文字都會被套上該格式。
+        # 先把 textCursor 的 charFormat 重置為空，避免這個污染。
+        reset = self.textCursor()
+        reset.clearSelection()
+        reset.setCharFormat(QTextCharFormat())
+        self.setTextCursor(reset)
         self.setPlainText(full_text)
         self._doc_length = len(full_text)
         self._target_pos = 0

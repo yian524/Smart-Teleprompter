@@ -1756,9 +1756,20 @@ class MainWindow(QMainWindow):
         else:
             # 1) dump 格式
             formats_to_keep = self.view.dump_format_spans()
+            text_len_before = len(self.view.toPlainText())
             # 2) set_edit_mode(False) → _on_transcript_edited → set_text（清 document）
             self.view.set_edit_mode(False)
-            # 3) 重新套格式到新 document
+            # 3) 若 text_len 變了（_apply_transcript / MD 重繪可能影響），濾除越界 span
+            text_len_after = len(self.view.toPlainText())
+            if text_len_before != text_len_after:
+                logger.warning(
+                    "edit-exit: text_len 變化 %d → %d，濾除越界 span",
+                    text_len_before, text_len_after,
+                )
+                formats_to_keep = [
+                    s for s in formats_to_keep if s.end <= text_len_after
+                ]
+            # 4) 重新套格式到新 document
             if formats_to_keep:
                 try:
                     self.view.restore_format_spans(formats_to_keep)

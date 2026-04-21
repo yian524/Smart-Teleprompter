@@ -121,41 +121,52 @@ def dump_formats(doc: QTextDocument) -> list[FormatSpan]:
 
 
 def restore_formats(doc: QTextDocument, spans: list[FormatSpan]) -> None:
-    """把一系列 FormatSpan 套回 doc。以純文字 offset 為準，越界會被自動 clip。
+    """把一系列 FormatSpan 套回 doc。
 
-    **安全機制**：若任一 span 覆蓋整篇 >80%，視為舊版 bug 殘留的壞資料 → 全部丟棄。
-    使用者可用編輯模式 + `全部清除格式` 手動重建。
+    **安全機制**：
+    1. `end > text_len * 1.05` 的壞 span 直接丟棄（不夾到 text_len，避免擴散至整篇）
+    2. 累計覆蓋 >80% → 視為壞資料，全部跳過
     """
     if not spans:
         return
     text_len = len(doc.toPlainText())
     if text_len <= 0:
         return
-    # 計算所有 span 的累計覆蓋（合併 overlap）。若總覆蓋 > 80% → 視為壞資料丟棄
-    in_doc_spans = [
-        (max(0, s.start), min(text_len, s.end)) for s in spans
-        if s.end <= text_len * 1.05 and s.end > s.start
-    ]
-    if in_doc_spans:
-        merged: list[tuple[int, int]] = []
-        for s, e in sorted(in_doc_spans):
-            if merged and s <= merged[-1][1]:
-                merged[-1] = (merged[-1][0], max(merged[-1][1], e))
-            else:
-                merged.append((s, e))
-        total_covered = sum(e - s for s, e in merged)
-        if total_covered > text_len * 0.8:
-            import logging
-            logging.getLogger(__name__).warning(
-                "偵測到 FormatSpans 總覆蓋 %.0f%% 全文（疑似壞資料），已跳過全部格式還原",
-                100 * total_covered / max(1, text_len),
-            )
-            return
-    for span in spans:
-        start = max(0, min(text_len, span.start))
-        end = max(0, min(text_len, span.end))
-        if end <= start:
+
+    # 1) 夾到 doc 範圍內；明顯越界（end > text_len * 1.05）的 span 直接丟棄
+    clipped: list[tuple[int, int, FormatSpan]] = []
+    for s in spans:
+        if s.end <= s.start:
             continue
+        if s.end > text_len * 1.05:
+            # 壞資料：丟棄整條，而非夾到 text_len（避免套到整篇）
+            continue
+        start = max(0, min(text_len, s.start))
+        end = max(0, min(text_len, s.end))
+        if end > start:
+            clipped.append((start, end, s))
+
+    if not clipped:
+        return
+
+    # 2) 覆蓋率檢查（基於夾過的 span）
+    merged: list[tuple[int, int]] = []
+    for start, end, _ in sorted(clipped):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    total_covered = sum(e - s for s, e in merged)
+    if total_covered > text_len * 0.8:
+        import logging
+        logging.getLogger(__name__).warning(
+            "偵測到 FormatSpans 總覆蓋 %.0f%% 全文（疑似壞資料），已跳過全部格式還原",
+            100 * total_covered / max(1, text_len),
+        )
+        return
+
+    # 3) 套用（**用夾過的 start/end**，不是原 span.start/end）
+    for start, end, span in clipped:
         cursor = QTextCursor(doc)
         cursor.setPosition(start)
         cursor.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
