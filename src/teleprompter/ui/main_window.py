@@ -704,7 +704,9 @@ class MainWindow(QMainWindow):
 
         # 🖊 鉛筆 + 🎨 顏色（放在鉛筆正旁邊）
         self.act_tool_pencil = QAction("🖊 鉛筆", self)
-        self.act_tool_pencil.setToolTip("在講稿或投影片上畫重點 (P)")
+        self.act_tool_pencil.setToolTip(
+            "【標註層】自由手繪畫在畫面上（不動講稿文字本身）(P)"
+        )
         self.act_tool_pencil.setCheckable(True)
         self.act_tool_pencil.triggered.connect(lambda: self._set_annotation_tool("pencil"))
         self.annotation_toolbar.addAction(self.act_tool_pencil)
@@ -748,13 +750,18 @@ class MainWindow(QMainWindow):
 
         # 🧽 橡皮擦 + 🧹 清除本頁
         self.act_tool_eraser = QAction("🧽 橡皮擦", self)
-        self.act_tool_eraser.setToolTip("塗抹式刪除標註 (E)")
+        self.act_tool_eraser.setToolTip(
+            "【標註層】塗抹式刪除筆劃與便利貼 (E)"
+        )
         self.act_tool_eraser.setCheckable(True)
         self.act_tool_eraser.triggered.connect(lambda: self._set_annotation_tool("eraser"))
         self.annotation_toolbar.addAction(self.act_tool_eraser)
 
-        self.act_clear_page = QAction("🧹 清除本頁", self)
-        self.act_clear_page.setToolTip("一鍵清除當前頁所有標註（含筆劃 + 便利貼）")
+        self.act_clear_page = QAction("🗑 清除全部標註", self)
+        self.act_clear_page.setToolTip(
+            "一鍵清除當前頁的所有「標註」（鉛筆筆劃 + 便利貼）；"
+            "這跟「清除文字格式」不同 — 不會動到講稿文字本身。"
+        )
         self.act_clear_page.triggered.connect(self._clear_current_page_annotations)
         self.annotation_toolbar.addAction(self.act_clear_page)
 
@@ -804,7 +811,9 @@ class MainWindow(QMainWindow):
         self.edit_toolbar.addAction(self.act_underline)
 
         self.act_highlight = QAction("🖍", self)
-        self.act_highlight.setToolTip("螢光筆 (Ctrl+H)")
+        self.act_highlight.setToolTip(
+            "【文字格式】螢光筆 — 把選取文字加上黃色背景色 (Ctrl+H)"
+        )
         self.act_highlight.setShortcut("Ctrl+H")
         self.act_highlight.triggered.connect(self.view.toggle_highlight)
         self.edit_toolbar.addAction(self.act_highlight)
@@ -815,8 +824,10 @@ class MainWindow(QMainWindow):
         self.act_clear_fmt.triggered.connect(self.view.clear_format)
         self.edit_toolbar.addAction(self.act_clear_fmt)
 
-        self.act_clear_all_fmt = QAction("🧽 全部清除", self)
-        self.act_clear_all_fmt.setToolTip("清除整篇文字的粗體/斜體/底線/螢光筆格式（不需選取）")
+        self.act_clear_all_fmt = QAction("❌ 清文字格式", self)
+        self.act_clear_all_fmt.setToolTip(
+            "清除整篇文字的粗體/斜體/底線/螢光筆格式（不影響畫在畫面上的鉛筆/便利貼）。"
+        )
         self.act_clear_all_fmt.triggered.connect(self._clear_all_formatting)
         self.edit_toolbar.addAction(self.act_clear_all_fmt)
 
@@ -1763,8 +1774,32 @@ class MainWindow(QMainWindow):
         self.status_recognized.setText("⚠ 已達設定時長。")
 
     def _on_view_clicked(self, global_char: int) -> None:
-        result = self.engine.jump_to_global_char(global_char)
-        self.view.set_position(result.global_char_pos, animate=False)
+        """使用者雙擊講稿位置（非編輯模式下）。
+
+        彈出對話框問使用者要「進入編輯模式」還是「只跳到此處」。
+        """
+        ret = QMessageBox.question(
+            self, "編輯或跳轉",
+            "要從這裡開始編輯講稿嗎？\n\n"
+            "  是：進入編輯模式，游標自動定位到這裡\n"
+            "  否：只把念稿位置跳到這裡（不編輯）",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if ret == QMessageBox.StandardButton.Yes:
+            # 進編輯模式（toggle act_edit_mode 觸發完整流程，含 toolbar 按鈕狀態）
+            if not self.act_edit_mode.isChecked():
+                self.act_edit_mode.setChecked(True)
+            # 把 cursor 放到點擊位置
+            cur = self.view.textCursor()
+            cur.setPosition(max(0, min(global_char, len(self.view.toPlainText()))))
+            self.view.setTextCursor(cur)
+            self.view.setFocus()
+            self.status_recognized.setText("✏ 已進入編輯模式，游標已定位")
+        else:
+            # 原本行為：跳到該位置（不編輯）
+            result = self.engine.jump_to_global_char(global_char)
+            self.view.set_position(result.global_char_pos, animate=False)
 
     def _script_progress(self) -> float:
         if self.transcript is None or self.transcript.total_chars == 0:
