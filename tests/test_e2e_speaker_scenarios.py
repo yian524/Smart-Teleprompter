@@ -425,22 +425,20 @@ def test_edit_exit_preserves_position_and_format(mw, sample_transcript, app):
 
 
 def test_edit_toolbar_hidden_when_not_editing(mw, sample_transcript, app):
-    """編輯工具按鈕在非編輯模式應完全隱藏。"""
+    """編輯工具列在非編輯模式應完全隱藏。"""
     mw.load_file(str(sample_transcript))
     app.processEvents()
-    # 預設非編輯模式
     assert not mw.view.is_edit_mode()
-    for act in (mw.act_bold, mw.act_italic, mw.act_underline,
-                mw.act_highlight, mw.act_clear_fmt,
-                mw.act_insert_annotation, mw.act_compact_ws):
-        assert not act.isVisible(), f"{act.text()} 在非編輯模式應隱藏"
-    # 進編輯 → 顯示
+    # 整條編輯工具列隱藏
+    assert not mw.edit_toolbar.isVisible(), "非編輯模式編輯工具列應隱藏"
+    # 進編輯 → 工具列可見 + actions 啟用
     mw.view.set_edit_mode(True)
     app.processEvents()
+    assert mw.edit_toolbar.isVisible(), "編輯模式編輯工具列應顯示"
     for act in (mw.act_bold, mw.act_italic, mw.act_underline,
                 mw.act_highlight, mw.act_clear_fmt,
                 mw.act_insert_annotation, mw.act_compact_ws):
-        assert act.isVisible(), f"{act.text()} 在編輯模式應顯示"
+        assert act.isEnabled(), f"{act.text()} 在編輯模式應啟用"
 
 
 # ============================================================

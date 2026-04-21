@@ -568,68 +568,68 @@ class MainWindow(QMainWindow):
 
         tb.addSeparator()
 
-        # 編輯模式 + 註解插入
+        # 編輯模式開關（主 toolbar，永遠可見）
         self.act_edit_mode = QAction("✏ 編輯模式", self)
         self.act_edit_mode.setShortcut("Ctrl+E")
         self.act_edit_mode.setCheckable(True)
         self.act_edit_mode.toggled.connect(self._toggle_edit_mode)
         tb.addAction(self.act_edit_mode)
 
+        # 第二條工具列：編輯專用（編輯模式開啟才顯示）
+        self.edit_toolbar = QToolBar("編輯工具列", self)
+        self.edit_toolbar.setMovable(False)
+        self.addToolBarBreak()   # 另起一行
+        self.addToolBar(self.edit_toolbar)
+
         self.act_insert_annotation = QAction("💬 插入註解", self)
         self.act_insert_annotation.triggered.connect(self._insert_annotation)
-        self.act_insert_annotation.setEnabled(False)
-        self.act_insert_annotation.setVisible(False)  # 編輯模式 ON 才顯示
-        tb.addAction(self.act_insert_annotation)
+        self.edit_toolbar.addAction(self.act_insert_annotation)
 
         self.act_compact_ws = QAction("🧹 清理空白", self)
         self.act_compact_ws.setToolTip("移除多餘空白行與行尾空白，段落間只保留一個空白行")
         self.act_compact_ws.triggered.connect(self._compact_whitespace)
-        self.act_compact_ws.setEnabled(False)
-        self.act_compact_ws.setVisible(False)
-        tb.addAction(self.act_compact_ws)
+        self.edit_toolbar.addAction(self.act_compact_ws)
 
-        tb.addSeparator()
+        self.edit_toolbar.addSeparator()
 
-        # 格式化群組（只在編輯模式啟用）
         self.act_bold = QAction("B", self)
         self.act_bold.setToolTip("粗體 (Ctrl+B)")
         self.act_bold.setShortcut("Ctrl+B")
         self.act_bold.triggered.connect(self.view.toggle_bold)
-        self.act_bold.setEnabled(False)
-        self.act_bold.setVisible(False)
-        tb.addAction(self.act_bold)
+        self.edit_toolbar.addAction(self.act_bold)
 
         self.act_italic = QAction("I", self)
         self.act_italic.setToolTip("斜體 (Ctrl+I)")
         self.act_italic.setShortcut("Ctrl+I")
         self.act_italic.triggered.connect(self.view.toggle_italic)
-        self.act_italic.setEnabled(False)
-        self.act_italic.setVisible(False)
-        tb.addAction(self.act_italic)
+        self.edit_toolbar.addAction(self.act_italic)
 
         self.act_underline = QAction("U", self)
         self.act_underline.setToolTip("底線 (Ctrl+U)")
         self.act_underline.setShortcut("Ctrl+U")
         self.act_underline.triggered.connect(self.view.toggle_underline)
-        self.act_underline.setEnabled(False)
-        self.act_underline.setVisible(False)
-        tb.addAction(self.act_underline)
+        self.edit_toolbar.addAction(self.act_underline)
 
         self.act_highlight = QAction("🖍", self)
         self.act_highlight.setToolTip("螢光筆 (Ctrl+H)")
         self.act_highlight.setShortcut("Ctrl+H")
         self.act_highlight.triggered.connect(self.view.toggle_highlight)
-        self.act_highlight.setEnabled(False)
-        self.act_highlight.setVisible(False)
-        tb.addAction(self.act_highlight)
+        self.edit_toolbar.addAction(self.act_highlight)
 
         self.act_clear_fmt = QAction("✖格式", self)
         self.act_clear_fmt.setToolTip("清除格式 (Ctrl+\\)")
         self.act_clear_fmt.setShortcut("Ctrl+\\")
         self.act_clear_fmt.triggered.connect(self.view.clear_format)
-        self.act_clear_fmt.setEnabled(False)
-        self.act_clear_fmt.setVisible(False)
-        tb.addAction(self.act_clear_fmt)
+        self.edit_toolbar.addAction(self.act_clear_fmt)
+
+        # 預設隱藏整條 edit toolbar（只在編輯模式顯示）
+        self.edit_toolbar.setVisible(False)
+        for act in (
+            self.act_insert_annotation, self.act_compact_ws,
+            self.act_bold, self.act_italic, self.act_underline,
+            self.act_highlight, self.act_clear_fmt,
+        ):
+            act.setEnabled(False)
 
         # 編輯模式切換時重設結果（MD 重新 parse）
         self.view.text_edited.connect(self._on_transcript_edited)
@@ -1788,7 +1788,8 @@ class MainWindow(QMainWindow):
         self.status_recognized.setText("🧹 已清理多餘空白")
 
     def _on_edit_mode_changed(self, enabled: bool) -> None:
-        # 編輯相關動作在非編輯模式「完全隱藏」（避免使用者誤以為可點擊）
+        # 整條編輯工具列在非編輯模式隱藏；內部 action 設 enable 同步
+        self.edit_toolbar.setVisible(enabled)
         for act in (
             self.act_insert_annotation,
             self.act_compact_ws,
@@ -1798,7 +1799,6 @@ class MainWindow(QMainWindow):
             self.act_highlight,
             self.act_clear_fmt,
         ):
-            act.setVisible(enabled)
             act.setEnabled(enabled)
         if enabled:
             self.act_edit_mode.setText("✏ 編輯模式 (ON)")
