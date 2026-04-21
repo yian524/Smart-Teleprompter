@@ -356,9 +356,11 @@ class MainWindow(QMainWindow):
         self.qa_panel = QAPanel()
         self.qa_panel.close_qa_mode.connect(self._exit_qa_mode)
         self.qa_panel.language_changed.connect(self._switch_recognizer_language)
+        # 降低最小寬度：原本太寬會吃掉講稿區；280px 夠顯示問答欄 + 語言 combo
+        self.qa_panel.setMinimumWidth(280)
         self.main_splitter.addWidget(self.qa_panel)
-        self.main_splitter.setStretchFactor(0, 3)
-        self.main_splitter.setStretchFactor(1, 2)
+        self.main_splitter.setStretchFactor(0, 4)   # 提詞區再放寬一點
+        self.main_splitter.setStretchFactor(1, 1)   # QA 面板較窄
         self.qa_panel.hide()                          # 預設不顯示，按 Q&A 模式才展開
         central_layout.addWidget(self.main_splitter, 1)
 
@@ -1922,10 +1924,16 @@ class MainWindow(QMainWindow):
         self.status_recognized.setText("⚠ 已達設定時長。")
 
     def _on_view_clicked(self, global_char: int) -> None:
-        """使用者雙擊講稿位置（非編輯模式下）。
+        """使用者單擊/雙擊講稿位置。
 
-        彈出對話框問使用者要「進入編輯模式」還是「只跳到此處」。
+        正式報告中（audio running）→ 點擊只跳位置、不彈編輯對話框（避免台上誤觸）。
+        暫停 / 尚未開始 → 彈出對話框問「編輯或跳轉」。
         """
+        # 報告進行中 → 不允許點擊進編輯，只當作跳位
+        if self.audio.is_running():
+            result = self.engine.jump_to_global_char(global_char)
+            self.view.set_position(result.global_char_pos, animate=False)
+            return
         ret = QMessageBox.question(
             self, "編輯或跳轉",
             "要從這裡開始編輯講稿嗎？\n\n"
@@ -2334,8 +2342,17 @@ class MainWindow(QMainWindow):
         self.qa_panel.show()
         self.act_qa_mode.setChecked(True)
         self.act_qa_mode.setText("🎤 Q&A 模式 (ON)")
+        # 自動勾選「翻譯中文」：觀眾可能用英文提問，翻譯即時給中文
+        if hasattr(self.qa_panel, "translate_check") and not self.qa_panel.translate_check.isChecked():
+            self.qa_panel.translate_check.setChecked(True)
         # 預設切換到「自動語言偵測」以辨識英文提問
         self._switch_recognizer_language(self.qa_panel.get_language())
+        # 模型載入進度：用與 ▶ 開始 相同的 loading overlay，直到 _on_model_loaded 淡出
+        if hasattr(self, "loading_overlay"):
+            self.loading_overlay.set_status(
+                "Q&A 模式準備中", "正在切換辨識模型…",
+            )
+            self.loading_overlay.show_over(self.view)
         self.status_recognized.setText("Q&A 模式：觀眾提問會辨識並匹配預備答案")
 
     def _exit_qa_mode(self) -> None:
