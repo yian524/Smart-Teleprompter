@@ -29,7 +29,7 @@ FRAME_SAMPLES = SAMPLE_RATE * FRAME_DURATION_MS // 1000
 
 WINDOW_SEC = 4.0                # 串流視窗長度（從 6s→4s 縮短 Whisper 推論時間 ~30%）
 EMIT_INTERVAL_MS = 350          # 每 350ms 觸發一次辨識（從 400→350 更靈敏；backlog 已由 drop policy 處理）
-RECENT_VOICE_WINDOW_MS = 1500   # 視窗內近 1.5s 有過語音才送辨識（過濾純靜音）
+RECENT_VOICE_WINDOW_MS = 2500   # 視窗內近 2.5s 有過語音才送辨識（放寬：低音量麥稀疏的 voice 偵測也能觸發）
 SILENCE_RESET_MS = 1500         # 連續 1.5 秒靜音 → 視窗重置（句子邊界）
 MIN_EMIT_MS = 600               # 視窗內音訊低於此時長不送辨識
 
@@ -99,7 +99,9 @@ class AudioCaptureWorker(QObject):
             return
 
         try:
-            self._vad = webrtcvad.Vad(2)  # 0~3，越大越嚴格
+            # webrtcvad 模式 0~3，越大越嚴格。用 1（原本 2）對低音量麥寬容一些，
+            # 避免「第一句辨到之後 webrtcvad 沒再偵測到語音 → 視窗不送辨識」
+            self._vad = webrtcvad.Vad(1)
         except Exception as e:
             self.error.emit(f"VAD 初始化失敗: {e}")
             return
