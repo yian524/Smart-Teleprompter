@@ -470,16 +470,16 @@ class MainWindow(QMainWindow):
         self.act_start.triggered.connect(self._toggle_run)
         tb.addAction(self.act_start)
 
-        self.act_reset_pos = QAction("⤴ 回頂", self)
-        self.act_reset_pos.setToolTip("講稿跳回第一句")
-        self.act_reset_pos.triggered.connect(self._reset_position)
-        tb.addAction(self.act_reset_pos)
-
         self.act_goto_speech = QAction("📍 回念稿位置", self)
         self.act_goto_speech.setToolTip("把視窗捲回目前辨識的位置（Ctrl+Home）")
         self.act_goto_speech.setShortcut("Ctrl+Home")
         self.act_goto_speech.triggered.connect(self._goto_speech_position)
         tb.addAction(self.act_goto_speech)
+
+        self.act_reset_pos = QAction("⤴ 回頂", self)
+        self.act_reset_pos.setToolTip("講稿跳回第一句")
+        self.act_reset_pos.triggered.connect(self._reset_position)
+        tb.addAction(self.act_reset_pos)
 
         self.act_clear_skipped = QAction("✖ 清漏講", self)
         self.act_clear_skipped.setToolTip("清除漏講標記（Ctrl+Shift+K）")
