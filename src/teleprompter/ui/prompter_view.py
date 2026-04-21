@@ -1471,6 +1471,12 @@ class PrompterView(QTextEdit):
     def zoomInF(self, range=1):  # noqa: A003
         pass
 
+    def _is_on_slide_image(self, rel_point: QPoint) -> bool:
+        """點是否落在目前 viewport 裡某一頁的 slide 圖形範圍。"""
+        if self._slide_deck is None:
+            return False
+        return self._page_at_viewport_pos(rel_point.x(), rel_point.y()) is not None
+
     def _page_at_viewport_pos(self, x: int, y: int) -> int | None:
         """判斷 viewport 座標 (x, y) 是否點到某張 slide；回 page_no 或 None。"""
         if self._slide_deck is None or not self._page_boundaries:
@@ -1638,6 +1644,7 @@ class PrompterView(QTextEdit):
                 event.button() == Qt.MouseButton.LeftButton
                 and press is not None
                 and (press - rel_point).manhattanLength() < 5
+                and not self._is_on_slide_image(rel_point)   # 點在投影片上不觸發編輯
             ):
                 cursor = self.cursorForPosition(rel_point)
                 # 先讓 QTextEdit 處理 release（清選取等）

@@ -145,6 +145,38 @@ def test_multiline_comments_stripped():
     assert "註解" not in cleaned
 
 
+def test_inline_comment_not_in_sentence_normalized():
+    """講稿內嵌 <!-- ... --> 備忘，normalized（給 ASR 對齊用）不該含備忘文字。"""
+    t = load_from_string("大家好<!-- 記得提 PyTorch 2.4 -->今天要分享 Transformer。")
+    assert len(t.sentences) == 1
+    s = t.sentences[0]
+    # text 保留原始（顯示時看得到）
+    assert "<!--" in s.text
+    assert "記得提" in s.text
+    # normalized 是給對齊 engine 用的；不該含備忘的字
+    assert "記得提" not in s.normalized
+    assert "pytorch" not in s.normalized
+    # 要念的部分仍在
+    assert "大家好" in s.normalized
+    assert "transformer" in s.normalized
+
+
+def test_inline_comment_does_not_break_char_map():
+    """含 inline 註解時，每個 normalized 字元的 char_map 仍指向正確的 full_text 位置。"""
+    t = load_from_string("你好<!-- 備忘 -->世界。")
+    s = t.sentences[0]
+    # normalized = "你好 世界"（或類似，標點被剝）
+    # 每個 map 位置都應在 full_text 範圍內且落在非註解字元上
+    for i, norm_ch in enumerate(s.normalized):
+        if norm_ch == " ":
+            continue
+        pos = s.char_map[i]
+        assert 0 <= pos < len(t.full_text)
+        orig_ch = t.full_text[pos]
+        # normalized 字元應對應到 full_text 上對應的字（忽略大小寫/全形）
+        assert orig_ch not in "<-!"  # 不應指到註解語法的字元
+
+
 def test_page_separator_creates_pages():
     text = (
         "第一頁第一句。第一頁第二句。\n"

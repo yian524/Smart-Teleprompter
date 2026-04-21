@@ -151,7 +151,14 @@ def normalize_text(text: str) -> str:
 
 
 def _make_sentence(raw: str, global_start: int, global_end: int) -> Sentence:
-    normalized, char_map = normalize_with_map(raw, base_offset=global_start)
+    # 把 <!-- ... --> 註解遮成空白，讓 normalize 不會把備忘當成要念的內容
+    # （text 仍保留原始含註解字串，顯示時使用者看得到；normalized 只留要念的部分）
+    masked_chars = list(raw)
+    for m in _COMMENT_RE.finditer(raw):
+        for i in range(m.start(), m.end()):
+            masked_chars[i] = " "
+    masked = "".join(masked_chars)
+    normalized, char_map = normalize_with_map(masked, base_offset=global_start)
     return Sentence(
         text=raw,
         normalized=normalized,
@@ -168,38 +175,48 @@ def split_sentences(text: str) -> list[Sentence]:
     - 空白行
     - Markdown 標題行（以 #, ##, ### 開頭）—— 標題作為頁面元資訊，不做為講稿內容
     - 分頁符號行（---, ===, ***）
+    - `<!-- ... -->` 註解（含跨行、inline）— `!` 是句末符號但在註解內不應觸發切句
     """
     sentences: list[Sentence] = []
     if not text:
         return sentences
 
+    # 把 `<!-- ... -->` 整段遮成空白（長度不變）→ 讓句末符號偵測不會被 `<!` 誤切
+    masked_chars = list(text)
+    for m in _COMMENT_RE.finditer(text):
+        for i in range(m.start(), m.end()):
+            masked_chars[i] = " "
+    masked_text = "".join(masked_chars)
+
     pos = 0
-    for line in text.split("\n"):
-        stripped = line.strip()
+    orig_lines = text.split("\n")
+    masked_lines = masked_text.split("\n")
+    for orig_line, masked_line in zip(orig_lines, masked_lines):
+        stripped = orig_line.strip()
         if not stripped:
-            pos += len(line) + 1
+            pos += len(orig_line) + 1
             continue
         # 跳過 Markdown 標題（當作頁面 metadata，不當講稿）
         if stripped.startswith("#"):
-            pos += len(line) + 1
+            pos += len(orig_line) + 1
             continue
         # 跳過分頁符號
-        if _PAGE_SEPARATOR_RE.match(line):
-            pos += len(line) + 1
+        if _PAGE_SEPARATOR_RE.match(orig_line):
+            pos += len(orig_line) + 1
             continue
-        # 跳過整行註解 <!-- ... -->（當作寫給自己的備忘，不當講稿）
-        if stripped.startswith("<!--") and stripped.endswith("-->"):
-            pos += len(line) + 1
+        # 純註解行（整行都是 <!-- ... -->）→ masked_line 全空白 → 下面 regex 不會產 match
+        if not masked_line.strip():
+            pos += len(orig_line) + 1
             continue
         line_pos = 0
         for match in re.finditer(
             r"[^" + re.escape(_SENT_TERMINATORS) + r"]*?["
             + re.escape(_SENT_TERMINATORS) + r"]+\s*",
-            line,
+            masked_line,
         ):
-            chunk = match.group(0)
             start_in_line = match.start()
             end_in_line = match.end()
+            chunk = orig_line[start_in_line:end_in_line]   # 原始文字（顯示用）
             if not chunk.strip():
                 continue
             sentences.append(
@@ -207,13 +224,13 @@ def split_sentences(text: str) -> list[Sentence]:
             )
             line_pos = end_in_line
         # 行尾殘餘
-        if line_pos < len(line):
-            tail = line[line_pos:]
+        if line_pos < len(orig_line):
+            tail = orig_line[line_pos:]
             if tail.strip():
                 sentences.append(
-                    _make_sentence(tail, pos + line_pos, pos + len(line))
+                    _make_sentence(tail, pos + line_pos, pos + len(orig_line))
                 )
-        pos += len(line) + 1
+        pos += len(orig_line) + 1
 
     sentences = [s for s in sentences if s.normalized]
     return sentences
