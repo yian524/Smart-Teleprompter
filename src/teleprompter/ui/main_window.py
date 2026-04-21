@@ -1646,9 +1646,34 @@ class MainWindow(QMainWindow):
                     self._flash_skip_notice(marked)
             else:
                 self.view.set_position(result.global_char_pos)
+            # 跨頁 → 自動換頁（SlideModeView + 縮圖列；PrompterView 嵌入式靠 scroll 自動跟上）
+            self._maybe_auto_advance_page()
         self._update_recognizer_prompt()
         # 更新引擎狀態列（不論是否更新位置都顯示，讓使用者隨時可見引擎在做什麼）
         self._update_engine_status(result)
+
+    def _maybe_auto_advance_page(self) -> None:
+        """語者講到新頁的內容時 → 自動切換投影片與縮圖列到對應頁。
+
+        - SlideModeView（slide 模式或直屏 split 模式）：呼叫 set_current_page 切頁
+        - slide_preview 縮圖列：scroll_to_page 讓縮圖高亮跟著走
+        - PrompterView 嵌入式投影片（橫屏 split）：不用處理，其 paintEvent 已綁在 scroll 位置
+        """
+        if self.transcript is None or not self.transcript.pages:
+            return
+        idx = self.engine.current_sentence_index
+        page = self.transcript.page_of_sentence(idx)
+        if page is None:
+            return
+        page_idx_0 = page.number - 1
+        # SlideModeView 切頁
+        if self._content_stack.currentIndex() == 1:
+            if self.slide_mode_view.current_page() != page_idx_0:
+                self.slide_mode_view.set_current_page(page_idx_0)
+        # 縮圖列同步（slide 模式下才可見）
+        if self.slide_deck is not None and self.slide_preview.isVisible():
+            if 1 <= page.number <= self.slide_deck.page_count:
+                self.slide_preview.scroll_to_page(page.number)
 
     def _refresh_engine_status(self) -> None:
         """每 500ms 刷新引擎狀態（讓卡住秒數動態可見）。"""

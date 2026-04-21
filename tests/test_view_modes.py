@@ -198,6 +198,77 @@ def test_navigate_before_first_page_stays_put(main_window, tmp_path, app):
     assert main_window.slide_mode_view.current_page() == 0
 
 
+# --- Auto page-advance when speaker crosses page boundary via ASR ---
+
+
+def test_auto_advance_slide_mode_follows_sentence(main_window, tmp_path):
+    """講到第二頁的內容時 → slide_mode_view 自動翻到 page 1（0-based）。"""
+    _load_multi_page(main_window, tmp_path)
+    main_window._set_view_mode("slide")
+    assert main_window.slide_mode_view.current_page() == 0
+    # 模擬 engine 對齊到第二頁第一句
+    page1 = main_window.transcript.pages[1]
+    main_window.engine.jump_to_sentence(page1.sentence_start)
+    main_window._maybe_auto_advance_page()
+    assert main_window.slide_mode_view.current_page() == 1
+
+
+def test_auto_advance_portrait_split_follows_sentence(main_window, tmp_path):
+    """直屏 split 也用 SlideModeView → 自動換頁。"""
+    _load_multi_page(main_window, tmp_path)
+    # 模擬載入投影片（assign 一個假 deck 讓 split 直屏走 SlideModeView 分支）
+    class _FakeDeck:
+        page_count = 3
+        def close(self): pass
+        def render(self, *a, **kw): return None
+    # 直接塞到 session
+    active = main_window.session_manager.active
+    active.slide_deck = _FakeDeck()
+    main_window.slide_deck = _FakeDeck()
+    main_window.resize(800, 1400)   # 直屏
+    main_window._apply_orientation_layout()
+    main_window._set_view_mode("split")
+    # stack 應指向 SlideModeView
+    assert main_window._content_stack.currentIndex() == 1
+    # 跳到第三頁第一句
+    page2 = main_window.transcript.pages[2]
+    main_window.engine.jump_to_sentence(page2.sentence_start)
+    main_window._maybe_auto_advance_page()
+    assert main_window.slide_mode_view.current_page() == 2
+
+
+def test_auto_advance_noop_when_no_transcript(main_window):
+    """沒載入講稿時 _maybe_auto_advance_page 不應炸。"""
+    main_window.transcript = None
+    main_window._maybe_auto_advance_page()   # 不 raise
+
+
+def test_portrait_split_uses_slide_mode_view_when_deck_loaded(main_window, tmp_path):
+    """直屏 + split 模式 + 有 deck → 走 SlideModeView（投影片上、講稿下）。"""
+    _load_multi_page(main_window, tmp_path)
+    class _FakeDeck:
+        page_count = 3
+        def close(self): pass
+        def render(self, *a, **kw): return None
+    active = main_window.session_manager.active
+    active.slide_deck = _FakeDeck()
+    main_window.slide_deck = _FakeDeck()
+    main_window.resize(800, 1400)
+    main_window._apply_orientation_layout()
+    main_window._set_view_mode("split")
+    assert main_window._content_stack.currentIndex() == 1
+    assert not main_window.slide_preview.isVisible()   # 縮圖列隱藏（split 不顯示）
+
+
+def test_portrait_split_falls_back_to_prompterview_without_deck(main_window, tmp_path):
+    """直屏 + split 模式 + 沒 deck → 仍用 PrompterView 滿版（不切 SlideModeView）。"""
+    _load_multi_page(main_window, tmp_path)
+    main_window.resize(800, 1400)
+    main_window._apply_orientation_layout()
+    main_window._set_view_mode("split")
+    assert main_window._content_stack.currentIndex() == 0
+
+
 # --- SlideModeView key handling ---
 
 
