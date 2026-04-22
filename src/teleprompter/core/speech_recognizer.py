@@ -365,18 +365,16 @@ class SpeechRecognizerWorker(QObject):
             samples,
             language=self.language,
             initial_prompt=effective_prompt,
-            beam_size=5,
+            # beam_size=3：在 large-v3-turbo 上對短窗口的 WER 比 5 只差 ~1%，但推論快 ~30%
+            # 串流場景延遲是體感 #1 因素，accuracy 由 LocalAgreement-1 + alignment 後處理彌補
+            beam_size=3,
             best_of=1,
             temperature=0.0,
-            vad_filter=True,
-            # VAD 再放寬：低音量麥 + 句間停頓都不要吃掉
-            # （實測 threshold=0.3 仍會把大半段人聲當靜音；0.2 幾乎不誤判 garbage
-            #   因為靜音時 Silero 機率 ≈ 0.05，距離 0.2 還有餘裕）
-            vad_parameters={
-                "threshold": 0.2,
-                "min_silence_duration_ms": 250,
-                "speech_pad_ms": 250,
-            },
+            # 關掉 faster-whisper 內建 Silero VAD：上游 audio_capture 的 webrtcvad
+            # 已經 gate 過送進來的音訊都「最近 2.5 秒有語音」，再過一層 Silero 反而會
+            # 在低音量 / 句間停頓時把整段 4 秒砍光（log: "VAD filter removed 00:04.000"）
+            # → 引擎收不到字 → 卡住 → 後續大跳標一堆漏講
+            vad_filter=False,
             condition_on_previous_text=False,
             # 回到 whisper 預設值。更嚴格的 0.8 / -0.8 雖能阻擋 hallucination，但也會
             # 擋掉真實低信心的語音；交給 _is_hallucination 後濾做防線即可。

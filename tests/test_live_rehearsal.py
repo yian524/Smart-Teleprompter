@@ -323,11 +323,16 @@ def test_pr11_audio_controller_accepts_loopback_kwarg(mw):
     assert worker2.loopback is False
 
 
-def test_pr12_qa_mode_auto_checks_translation_and_loopback_config(mw, tmp_path):
-    """進 QA 模式 → 自動勾選翻譯中文；cfg.qa_use_system_audio 預設 True。"""
+def test_pr12_qa_mode_auto_checks_translation_and_loopback_config(mw, tmp_path, monkeypatch):
+    """進 QA 模式 → 自動勾選翻譯中文；cfg.qa_use_system_audio 預設 True。
+    Mock recognizer.start 避免實際載入 Whisper model 卡住測試（生產環境會真的載）。"""
     from teleprompter.config import AppConfig
     default = AppConfig()
     assert default.qa_use_system_audio is True
+    # mock 掉真正會 spawn QThread 載模型的 start/stop
+    monkeypatch.setattr(mw.recognizer, "start", lambda **kw: None)
+    monkeypatch.setattr(mw.recognizer, "stop", lambda: None)
+    monkeypatch.setattr(mw.recognizer, "is_running", lambda: False)
     # 開啟 QA
     mw._enter_qa_mode()
     assert mw.qa_panel.isVisible()

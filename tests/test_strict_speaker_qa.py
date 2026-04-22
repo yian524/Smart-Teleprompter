@@ -330,10 +330,17 @@ def test_s9_format_on_empty_selection_no_change(app, sessions_dir, sample_transc
 # 情境 S10：QA 模式 + 辨識並存不 crash
 # ============================================================
 
-def test_s10_qa_mode_toggle_no_crash(app, sessions_dir, sample_transcript):
+def test_s10_qa_mode_toggle_no_crash(app, sessions_dir, sample_transcript, monkeypatch):
     w = _make_mw(app)
     w.load_file(str(sample_transcript))
     app.processEvents()
+    # mock recognizer：QA 模式現在會 auto-start recognizer + audio，測試裡不能真的去載 Whisper
+    monkeypatch.setattr(w.recognizer, "start", lambda **kw: None)
+    monkeypatch.setattr(w.recognizer, "stop", lambda: None)
+    monkeypatch.setattr(w.recognizer, "is_running", lambda: False)
+    monkeypatch.setattr(w.audio, "start", lambda *a, **kw: None)
+    monkeypatch.setattr(w.audio, "stop", lambda: None)
+    monkeypatch.setattr(w.audio, "is_running", lambda: False)
     # toggle on / off 數次
     for _ in range(3):
         w._toggle_qa_mode(); app.processEvents()

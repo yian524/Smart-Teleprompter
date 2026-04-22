@@ -344,7 +344,12 @@ class MainWindow(QMainWindow):
         self.slide_mode_view.set_font_family(self._cfg_font_family)
         self.slide_mode_view.set_font_size(self._cfg_font_size)
         self.slide_mode_view.set_line_spacing(self._cfg_line_spacing)
-        self.slide_mode_view.set_colors(upcoming=self._cfg_upcoming_color)
+        self.slide_mode_view.set_colors(
+            upcoming=config.upcoming_color,
+            spoken=config.spoken_color,
+            current=config.highlight_color,
+            skipped=config.skipped_color,
+        )
         self._content_stack.addWidget(self.slide_mode_view)
         self._content_stack.setCurrentIndex(0)  # 預設顯示 PrompterView
         self.content_splitter.addWidget(self._content_stack)
@@ -369,11 +374,13 @@ class MainWindow(QMainWindow):
         # 允許拖拉檔案到主視窗（不需經由檔案對話框）
         self.setAcceptDrops(True)
 
-        # 載入遮罩（覆蓋在 view 上）
-        self.loading_overlay = LoadingOverlay(self.view)
+        # 載入遮罩（覆蓋在 stack 上 — 不論顯示 PrompterView 或 SlideModeView 都看得到）
+        self.loading_overlay = LoadingOverlay(self._content_stack)
         self.loading_overlay.hide()
         # 標記「使用者按下開始但模型還沒準備好」的 pending 狀態
         self._pending_start: bool = False
+        # QA 模式獨立啟動時的 pending：模型就緒後啟動音訊（loopback）
+        self._qa_pending_audio_start: bool = False
 
         # ---- 狀態列 ----
         sb = QStatusBar()
@@ -528,6 +535,18 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(50, self._restore_sessions_or_bootstrap)
         # 啟動時依視窗大小套一次自適應版面
         QTimer.singleShot(0, self._apply_orientation_layout)
+
+        # ---------- 自動儲存 ----------
+        # 編輯時 debounce：最後一次變更後 1.5 秒寫檔
+        self._autosave_debounce = QTimer(self)
+        self._autosave_debounce.setSingleShot(True)
+        self._autosave_debounce.setInterval(1500)
+        self._autosave_debounce.timeout.connect(self._perform_autosave)
+        # 週期性 backup：每 30 秒寫一次（防止編輯外的狀態改動遺失）
+        self._autosave_periodic = QTimer(self)
+        self._autosave_periodic.setInterval(30_000)
+        self._autosave_periodic.timeout.connect(self._perform_autosave)
+        self._autosave_periodic.start()
 
     # ---------- 介面建立 ----------
 
@@ -832,6 +851,22 @@ class MainWindow(QMainWindow):
         self.act_compact_ws.setToolTip("⚠ 會改動講稿文字：移除多餘空白行與行尾空白")
         self.act_compact_ws.triggered.connect(self._compact_whitespace)
         self.annotation_toolbar.addAction(self.act_compact_ws)
+
+        # === 標註工具列延伸（row 2）：直屏時顯示，把文字編輯類工具移到這裡 ===
+        # 避免直屏寬度不足時，B/I/U/格式/插入註解/清理空白 被擠到 overflow chevron 看不到
+        self.annotation_toolbar_row2 = QToolBar("標註工具延伸", self)
+        self.annotation_toolbar_row2.setMovable(False)
+        self.addToolBarBreak()
+        self.addToolBar(self.annotation_toolbar_row2)
+        self.annotation_toolbar_row2.setVisible(False)
+        # 直屏時要搬到 row2 的「文字編輯」類 actions
+        # 注意：act_edit_mode 留在 row 1（它一定可見且只佔 1 個 button，留 row 1 才不會空著佔一整列）
+        # row 2 只放「編輯模式開啟才會顯示」的 actions，這樣關閉編輯模式時 row 2 整個隱藏
+        self._annotation_secondary_acts = [
+            self.act_bold, self.act_italic, self.act_underline,
+            self.act_clear_fmt, self.act_clear_all_fmt,
+            self.act_insert_annotation, self.act_compact_ws,
+        ]
 
         # 工具互斥（不含 clear_page / edit_mode；選字改成指標模式下自動偵測 PDF 文字）
         from PySide6.QtGui import QActionGroup
@@ -1330,6 +1365,11 @@ class MainWindow(QMainWindow):
         self.view.set_slide_deck(deck)
         self._sync_slide_to_current_sentence()
         QTimer.singleShot(200, self._update_slide_label_from_viewport)
+        # 關鍵：剛載入投影片時，若目前是 split 模式 → 重跑 _set_view_mode("split")
+        # 讓「直屏 + 有 deck」的分支能切到 SlideModeView（不重跑的話會卡在純 PrompterView）
+        # landscape 走 PrompterView 嵌入式（同樣需要重跑來把 deck 綁進去）
+        if getattr(self, "_view_mode", "split") == "split":
+            self._set_view_mode("split")
         self.status_recognized.setText(
             f"✅ 投影片已載入 ({deck.page_count} 頁)"
         )
@@ -1602,6 +1642,8 @@ class MainWindow(QMainWindow):
         # 同步 SlideModeView（若目前在投影片模式，立即可見新文稿）
         self.slide_mode_view.set_transcript(transcript)
         self.slide_mode_view.set_current_page(0)
+        self.slide_mode_view.set_karaoke_position(transcript.sentences[0].start)
+        self.slide_mode_view.set_skipped_ranges([])
         # 更新 initial_prompt
         prompt = transcript.full_text[:200]
         self.recognizer.update_prompt(prompt)
@@ -1641,7 +1683,7 @@ class MainWindow(QMainWindow):
                 "正在載入語音辨識模型…",
                 f"模型：{self.cfg.model_size}（首次載入約需 10-30 秒）\n請稍候，模型就緒後會自動開始計時",
             )
-            self.loading_overlay.show_over(self.view)
+            self.loading_overlay.show_over(self._content_stack)
             self.recognizer.start(
                 model_size=self.cfg.model_size,
                 language=self.cfg.language,
@@ -1695,9 +1737,11 @@ class MainWindow(QMainWindow):
         result = self.engine.jump_to_sentence(0)
         self.view.set_position(result.global_char_pos, animate=False)
         self.view.clear_skipped()
+        self._sync_karaoke_to_slide_view()
 
     def _clear_skipped(self) -> None:
         self.view.clear_skipped()
+        self._sync_karaoke_to_slide_view()
 
     # ---------- 訊號處理 ----------
 
@@ -1738,9 +1782,13 @@ class MainWindow(QMainWindow):
         """串流辨識器吐出新穩定下來的文字 → 推進對齊位置。"""
         if not delta.strip():
             return
-        # Q&A 模式啟用中：文字同時路由到 Q&A 面板
+        # Q&A 模式啟用中：文字同時路由到 Q&A 面板 + 底部狀態列（讓使用者確認有收音）
         if self.qa_panel.isVisible():
             self.qa_panel.append_recognized(delta)
+            preview = delta.strip()
+            if len(preview) > 60:
+                preview = preview[:57] + "…"
+            self.status_recognized.setText(f"🎤 QA 收音：{preview}")
             # Q&A 模式下不推進提詞位置（避免錯亂）
             return
         if self.transcript is None:
@@ -1754,11 +1802,24 @@ class MainWindow(QMainWindow):
                     self._flash_skip_notice(marked)
             else:
                 self.view.set_position(result.global_char_pos)
+            # SlideModeView 同步：karaoke 位置 + skipped ranges（slide / 直屏 split 模式才看得到）
+            self._sync_karaoke_to_slide_view()
             # 跨頁 → 自動換頁（SlideModeView + 縮圖列；PrompterView 嵌入式靠 scroll 自動跟上）
             self._maybe_auto_advance_page()
         self._update_recognizer_prompt()
         # 更新引擎狀態列（不論是否更新位置都顯示，讓使用者隨時可見引擎在做什麼）
         self._update_engine_status(result)
+
+    def _sync_karaoke_to_slide_view(self) -> None:
+        """把 PrompterView 的 karaoke 狀態（位置 + 漏講範圍）推給 SlideModeView，
+        讓 slide 模式 / 直屏 split 模式也看得到提詞效果。"""
+        if not hasattr(self, "slide_mode_view"):
+            return
+        try:
+            self.slide_mode_view.set_karaoke_position(self.engine.current_global_char)
+            self.slide_mode_view.set_skipped_ranges(list(self.view._skipped_ranges))
+        except Exception:
+            pass
 
     def _maybe_auto_advance_page(self) -> None:
         """語者講到新頁的內容時 → 自動切換投影片與縮圖列到對應頁。
@@ -1783,6 +1844,58 @@ class MainWindow(QMainWindow):
             if 1 <= page.number <= self.slide_deck.page_count:
                 self.slide_preview.scroll_to_page(page.number)
 
+    def _maybe_auto_advance_to_next_page_on_silence(self) -> None:
+        """頁尾啟發式：當引擎停在當頁最後一句、位置已過 60% 字元、且 ≥ 3 秒未 commit
+        → 自動把位置跳到下一頁第一句，讓 karaoke 視覺繼續推進。
+
+        防止下列情境失效：使用者把當頁最後一句講完 → 短暫停頓 → 開始念下一頁；
+        但因為最後一句有少量沒被辨到的尾巴，引擎仍卡在當頁，下一頁的字一直沒高亮。
+        """
+        if self.transcript is None or not self.transcript.pages:
+            return
+        if not getattr(self, "audio", None) or not self.audio.is_running():
+            return
+        if getattr(self, "_qa_active", False):
+            return
+        idx = self.engine.current_sentence_index
+        page = self.transcript.page_of_sentence(idx)
+        if page is None:
+            return
+        # 必須是當頁最後一句
+        if idx != page.sentence_end - 1:
+            return
+        # 必須有下一頁
+        pages = self.transcript.pages
+        try:
+            page_pos = pages.index(page)
+        except ValueError:
+            return
+        if page_pos + 1 >= len(pages):
+            return
+        next_page = pages[page_pos + 1]
+        if next_page.sentence_start >= len(self.transcript.sentences):
+            return
+        # 位置必須過該句 40% 才算「大致講完」（從 60% 降低 → 更靈敏）
+        sent = self.transcript.sentences[idx]
+        sent_len = max(1, sent.end - sent.start)
+        progress = (self.engine.current_global_char - sent.start) / sent_len
+        if progress < 0.4:
+            return
+        # 必須卡 ≥ 1.5 秒（從 3 秒降低 → 更即時切頁）
+        stuck_s = time.monotonic() - self.engine._last_commit_time
+        if stuck_s < 1.5:
+            return
+        # 觸發跳頁
+        next_sent = self.transcript.sentences[next_page.sentence_start]
+        self.engine.jump_to_sentence(next_page.sentence_start)
+        self.view.set_position(next_sent.start, animate=True)
+        self._sync_karaoke_to_slide_view()
+        self._maybe_auto_advance_page()
+        if hasattr(self, "status_recognized"):
+            self.status_recognized.setText(
+                f"⏭ 自動跳到第 {next_page.number} 頁（上頁停頓 {stuck_s:.1f}s）"
+            )
+
     def _refresh_engine_status(self) -> None:
         """每 500ms 刷新引擎狀態（讓卡住秒數動態可見）。"""
         if self.transcript is None:
@@ -1796,6 +1909,8 @@ class MainWindow(QMainWindow):
             reason="(idle)",
         )
         self._update_engine_status(dummy)
+        # 頁尾停頓 → 自動跳到下一頁第一句（每 500ms 檢查一次）
+        self._maybe_auto_advance_to_next_page_on_silence()
 
     def _update_engine_status(self, result) -> None:
         if self.transcript is None:
@@ -1915,6 +2030,13 @@ class MainWindow(QMainWindow):
         if self._pending_start:
             # 使用者當初有按開始 → 自動接手正式啟動計時
             self._really_start_session()
+        elif getattr(self, "_qa_pending_audio_start", False):
+            # QA 模式獨立啟動：模型就緒後啟動音訊（loopback）
+            self._qa_pending_audio_start = False
+            self._start_audio_for_qa()
+            self.status_recognized.setText(
+                "🎤 Q&A 模式已啟動：辨識中（含系統聲音 loopback）"
+            )
 
     def _on_audio_error(self, msg: str) -> None:
         QMessageBox.warning(self, "麥克風錯誤", msg)
@@ -1991,6 +2113,7 @@ class MainWindow(QMainWindow):
         if hasattr(self, "mic_level"):
             self.mic_level.setFixedWidth(60 if is_portrait else 120)
         self._layout_main_toolbar(is_portrait)
+        self._layout_annotation_toolbar(is_portrait)
         # split 模式：橫/直屏切換時重跑 _set_view_mode 讓底層 view 換對
         if getattr(self, "_view_mode", None) == "split":
             active = self.session_manager.active if hasattr(self, "session_manager") else None
@@ -2003,32 +2126,80 @@ class MainWindow(QMainWindow):
             if want_portrait_split != currently_on_slide_view:
                 self._set_view_mode("split")
 
+    # 主工具列 action 在直屏的「短文字」對照表（只留 emoji；下拉/checkbox 也一起壓縮）
+    _COMPACT_LABELS: dict[str, str] = {
+        "act_open": "📂",
+        "act_open_slides": "🖼",
+        "act_start": "▶",
+        "act_goto_speech": "📍",
+        "act_reset_pos": "⤴",
+        "act_clear_skipped": "✖",
+        "act_reset_timer": "🔄",
+        "act_qa_mode": "🎤",
+        "act_record": "⏺",
+        "act_fullscreen": "⛶",
+        "act_settings": "⚙",
+    }
+
     def _layout_main_toolbar(self, is_portrait: bool) -> None:
-        """主工具列：landscape 全部在 row 1；portrait 拆成兩欄常駐顯示。"""
+        """主工具列：landscape 全部展開文字；portrait 同樣全部一行，但壓縮 emoji-only 讓擠得下，
+        達到「直屏也只有 2 列（main + annotation）」的目標。"""
         if not hasattr(self, "_main_toolbar_row2"):
             return
         tb1 = self._main_toolbar
         tb2 = self._main_toolbar_row2
-        primary = getattr(self, "_toolbar_primary_acts", None)
-        secondary = getattr(self, "_toolbar_secondary_acts", None)
-        if primary is None or secondary is None:
+        secondary = getattr(self, "_toolbar_secondary_acts", None) or []
+        # 1) secondary 永遠回到 row 1（不再分割），row 2 永久隱藏
+        for a in secondary:
+            if a in tb2.actions():
+                tb2.removeAction(a)
+            if a not in tb1.actions():
+                tb1.addAction(a)
+        tb2.setVisible(False)
+
+        # 2) 依 orientation 切換按鈕文字長度
+        if not hasattr(self, "_orig_action_texts"):
+            self._orig_action_texts = {}
+        for attr, short in self._COMPACT_LABELS.items():
+            act = getattr(self, attr, None)
+            if act is None:
+                continue
+            if attr not in self._orig_action_texts:
+                self._orig_action_texts[attr] = act.text()
+            act.setText(short if is_portrait else self._orig_action_texts[attr])
+
+        # 3) 壓縮 widget：checkbox / spinbox 在直屏改窄
+        if hasattr(self, "cb_target"):
+            if not hasattr(self, "_orig_cb_target_text"):
+                self._orig_cb_target_text = self.cb_target.text()
+            self.cb_target.setText("⏲" if is_portrait else self._orig_cb_target_text)
+        if hasattr(self, "sb_font_size"):
+            self.sb_font_size.setFixedWidth(60 if is_portrait else 80)
+        if hasattr(self, "sb_target_min"):
+            self.sb_target_min.setFixedWidth(60 if is_portrait else 80)
+
+    def _layout_annotation_toolbar(self, is_portrait: bool) -> None:
+        """標註工具列：landscape 全部在 row 1；portrait 把文字編輯類（B/I/U/格式...）搬到 row 2。
+        row 2 只在「直屏 + 編輯模式開啟（即 secondary 有可見項）」時才顯示，避免空 row 佔位。"""
+        if not hasattr(self, "annotation_toolbar_row2"):
             return
-        # 決定 secondary 應該在哪一條 toolbar
-        target = tb2 if is_portrait else tb1
-        current = tb1 if is_portrait else tb2
+        tb1 = self.annotation_toolbar
+        tb2 = self.annotation_toolbar_row2
+        secondary = getattr(self, "_annotation_secondary_acts", None)
         if not secondary:
             tb2.setVisible(False)
             return
-        # 檢查第一個 secondary action 現在是否已在 target — 已對齊就不用動
-        if secondary[0] in target.actions():
-            tb2.setVisible(is_portrait)
-            return
-        # 把 secondary 從 current 移到 target（保持順序）
-        for a in secondary:
-            if a in current.actions():
-                current.removeAction(a)
-            target.addAction(a)
-        tb2.setVisible(is_portrait)
+        target = tb2 if is_portrait else tb1
+        current = tb1 if is_portrait else tb2
+        # 把 secondary 移到對應的 toolbar（保持順序）
+        if secondary[0] not in target.actions():
+            for a in secondary:
+                if a in current.actions():
+                    current.removeAction(a)
+                target.addAction(a)
+        # 只有「直屏」且至少有一個 secondary 可見（= 編輯模式開啟）才顯示 row 2
+        any_visible = any(a.isVisible() for a in secondary)
+        tb2.setVisible(is_portrait and any_visible)
 
     def _clear_current_page_annotations(self) -> None:
         """清除當前檢視的所有標註（slide mode 清該 slide 頁；其他模式清所有 doc 錨點）。"""
@@ -2215,6 +2386,8 @@ class MainWindow(QMainWindow):
                 [a for a in active.annotations if a.anchor == "doc"]
             )
         self.slide_mode_view.set_current_page(self._current_page_idx())
+        # 進入 slide 模式 → 立刻同步當前 karaoke 狀態
+        self._sync_karaoke_to_slide_view()
         swap = active.layout_swapped if active is not None else False
         self._layout_swapped = swap
         self.slide_mode_view.set_layout_swapped(swap)
@@ -2263,29 +2436,33 @@ class MainWindow(QMainWindow):
         """收合 / 展開縮圖列。收合時顯示一個浮動 ▶ 按鈕可再展開。"""
         active = self.session_manager.active
         if collapse:
-            # 記住目前寬度；收合 → 隱藏 + 把 splitter 左欄壓到 0（否則空間仍被保留）
+            # 記住目前寬度；收合 → 隱藏 + 把 splitter 左欄壓到 0
             if active is not None:
                 sizes = self.content_splitter.sizes()
                 if len(sizes) >= 2 and sizes[0] > 0:
                     active.thumbnail_panel_width = sizes[0]
+            # 關鍵 1：minimumWidth 從 160 暫時降到 0，否則 setSizes([0, ...]) 會被夾回 160
+            self.slide_preview.setMinimumWidth(0)
             self.slide_preview.hide()
-            # 關鍵：把 splitter 左欄壓成 0，讓主內容區吃滿
             sizes = self.content_splitter.sizes()
             if len(sizes) >= 2:
                 total = sum(sizes)
                 self.content_splitter.setSizes([0, total])
             self._show_thumbnail_expand_btn()
         else:
-            # 展開 → 還原寬度
+            # 展開 → 還原最小寬度 + 顯示 + 還原寬度
+            self.slide_preview.setMinimumWidth(160)
             self.slide_preview.show()
             width = active.thumbnail_panel_width if active is not None else 200
             self._set_thumbnail_width(max(180, width))
             self._hide_thumbnail_expand_btn()
 
     def _show_thumbnail_expand_btn(self) -> None:
-        """在 content_splitter 左側顯示一個小按鈕讓使用者重新展開縮圖列。"""
+        """顯示浮動 ▶ 按鈕讓使用者重新展開縮圖列。
+        關鍵 2：parent 改 MainWindow（self），不要 parent 到 content_splitter，
+        否則 QSplitter 會把它當成 section 重排版面，破壞主內容區顯示。"""
         if not hasattr(self, "_btn_expand_thumb"):
-            self._btn_expand_thumb = QToolButton(self.content_splitter)
+            self._btn_expand_thumb = QToolButton(self)
             self._btn_expand_thumb.setText("▶")
             self._btn_expand_thumb.setToolTip("展開縮圖列")
             self._btn_expand_thumb.setStyleSheet(
@@ -2298,7 +2475,10 @@ class MainWindow(QMainWindow):
             self._btn_expand_thumb.clicked.connect(
                 lambda: self._on_thumbnail_collapse(False)
             )
-        self._btn_expand_thumb.move(0, self.content_splitter.height() // 2 - 20)
+        # 對齊到 content_splitter 的左上角；y 取垂直置中
+        target = self.content_splitter
+        top_left = target.mapTo(self, target.rect().topLeft())
+        self._btn_expand_thumb.move(top_left.x(), top_left.y() + target.height() // 2 - 20)
         self._btn_expand_thumb.show()
         self._btn_expand_thumb.raise_()
 
@@ -2349,20 +2529,51 @@ class MainWindow(QMainWindow):
         # 自動勾選「翻譯中文」：觀眾可能用英文提問，翻譯即時給中文
         if hasattr(self.qa_panel, "translate_check") and not self.qa_panel.translate_check.isChecked():
             self.qa_panel.translate_check.setChecked(True)
-        # 預設切換到「自動語言偵測」以辨識英文提問
-        self._switch_recognizer_language(self.qa_panel.get_language())
-        # 切換音訊輸入來源：QA → 系統 loopback（如設定允許）
-        if getattr(self.cfg, "qa_use_system_audio", True):
-            self._restart_audio_for_current_mode()
-        # 模型載入進度：用與 ▶ 開始 相同的 loading overlay，直到 _on_model_loaded 淡出
+        # 模型載入進度：用與 ▶ 開始 相同的 loading overlay
         if hasattr(self, "loading_overlay"):
             self.loading_overlay.set_status(
                 "Q&A 模式準備中", "正在切換辨識模型…",
             )
-            self.loading_overlay.show_over(self.view)
+            self.loading_overlay.show_over(self._content_stack)
+        # 核心修正：QA 模式要獨立可啟動，不需使用者先按 ▶ 開始
+        # 1) recognizer 未啟 → 從頭載入（載好後 _on_model_loaded 會啟動音訊）
+        # 2) recognizer 已啟 → 切語言 + 重啟音訊改用 loopback
+        if not self.recognizer.is_running():
+            self._qa_pending_audio_start = True
+            self.recognizer.start(
+                model_size=self.cfg.model_size,
+                language=self.qa_panel.get_language(),
+                compute_type=self.cfg.compute_type,
+                initial_prompt="",   # QA 模式不帶講稿偏向
+            )
+        else:
+            self._switch_recognizer_language(self.qa_panel.get_language())
+            # 音訊如果已在跑 → 重啟切到 loopback；如果還沒跑 → 直接啟動
+            if getattr(self.cfg, "qa_use_system_audio", True):
+                if self.audio.is_running():
+                    self._restart_audio_for_current_mode()
+                else:
+                    self._start_audio_for_qa()
         self.status_recognized.setText(
             "Q&A 模式：觀眾提問會辨識並匹配預備答案（含遠距 Teams/Zoom 輸出聲音）"
         )
+
+    def _start_audio_for_qa(self) -> None:
+        """QA 模式獨立啟動音訊（不用先按 ▶）。使用 loopback（如設定啟用）。"""
+        device = self.cfg.mic_device
+        device_arg: int | str | None
+        if device == "":
+            device_arg = None
+        else:
+            try:
+                device_arg = int(device)
+            except ValueError:
+                device_arg = device
+        use_loopback = bool(
+            self.qa_panel.isVisible()
+            and getattr(self.cfg, "qa_use_system_audio", True)
+        )
+        self.audio.start(device=device_arg, loopback=use_loopback)
 
     def _restart_audio_for_current_mode(self) -> None:
         """根據目前是否在 QA 模式 + cfg.qa_use_system_audio 重啟音訊擷取。
@@ -2445,22 +2656,36 @@ class MainWindow(QMainWindow):
                 self.act_record.blockSignals(False)
                 return
 
-            # 啟麥克風
+            # 啟麥克風（強制 mic 模式 — 錄影預期錄使用者人聲，不是系統 loopback）
             auto_started_audio = False
+            device = self.cfg.mic_device
+            device_arg: int | str | None
+            if device == "":
+                device_arg = None
+            else:
+                try:
+                    device_arg = int(device)
+                except ValueError:
+                    device_arg = device
             if not self.audio.is_running():
-                device = self.cfg.mic_device
-                device_arg: int | str | None
-                if device == "":
-                    device_arg = None
-                else:
-                    try:
-                        device_arg = int(device)
-                    except ValueError:
-                        device_arg = device
-                self.audio.start(device=device_arg)
+                self.audio.start(device=device_arg, loopback=False)
                 auto_started_audio = True
+            else:
+                # 如果目前是 loopback（例如在 QA 模式中），暫時切回 mic 才能錄到人聲
+                worker = getattr(self.audio, "_worker", None)
+                if worker is not None and getattr(worker, "loopback", False):
+                    self.audio.stop()
+                    self.audio.start(device=device_arg, loopback=False)
+                    auto_started_audio = True
+                    self.status_recognized.setText(
+                        "🎤 錄影：已切回麥克風（錄影結束自動切回原本來源）"
+                    )
 
-            ok = self.recorder.start(default_recording_root(), target=target, fps=30)
+            # 截圖頻率：螢幕用 15fps（DWM 合成器在高頻 BitBlt 下會閃爍）；
+            # 視窗用 24fps（widget.grab 不經 DWM，可以高頻一些但仍保守）
+            from teleprompter.core.video_encoder import CaptureSource
+            target_fps = 15 if target.source != CaptureSource.WIDGET else 24
+            ok = self.recorder.start(default_recording_root(), target=target, fps=target_fps)
             if not ok:
                 self.act_record.blockSignals(True)
                 self.act_record.setChecked(False)
@@ -2507,13 +2732,21 @@ class MainWindow(QMainWindow):
             self._mux_dialog.close()
             self._mux_dialog = None
         self.status_recording.setText("")
+        # 若錄影前曾因 QA 模式把音訊從 loopback 切到 mic → 錄完切回 loopback
+        if (
+            getattr(self.cfg, "qa_use_system_audio", True)
+            and self.qa_panel.isVisible()
+            and self.audio.is_running()
+        ):
+            worker = getattr(self.audio, "_worker", None)
+            if worker is not None and not getattr(worker, "loopback", False):
+                self._restart_audio_for_current_mode()
         if mp4_path:
-            reply = QMessageBox.information(
+            QMessageBox.information(
                 self, "錄影已儲存",
                 f"MP4 影音檔已儲存於:\n{mp4_path}",
                 QMessageBox.StandardButton.Ok,
             )
-            # 附：可點「開啟資料夾」選項（之後加）
 
     def _on_record_error(self, msg: str) -> None:
         if self._mux_dialog is not None:
@@ -2730,6 +2963,10 @@ class MainWindow(QMainWindow):
             self.act_edit_mode.blockSignals(True)
             self.act_edit_mode.setChecked(enabled)
             self.act_edit_mode.blockSignals(False)
+        # 直屏時 row 2 的可見性取決於這些 secondary 是否可見 → 編輯模式切換時要重 layout
+        if hasattr(self, "annotation_toolbar_row2"):
+            is_portrait = self.width() < self.height()
+            self._layout_annotation_toolbar(is_portrait)
 
     def _on_transcript_edited(self, new_text: str) -> None:
         """使用者離開編輯模式 → 重新 parse、存到 session.modified_text、標記 dirty。"""
@@ -2748,6 +2985,62 @@ class MainWindow(QMainWindow):
             active.modified_text = new_text
             active.dirty = True
             self.session_manager.sessions_changed.emit()  # 讓 tab 標題若需要可加 *
+        # 觸發自動儲存（debounce 1.5 秒）
+        if hasattr(self, "_autosave_debounce"):
+            self._autosave_debounce.start()
+
+    def _perform_autosave(self) -> None:
+        """自動儲存：靜默寫講稿檔 + sessions.json。失敗只記 log，不彈視窗。
+
+        - 有 transcript_path 且檔案存在 → 直接覆寫該檔
+        - 無路徑 → 寫到 ~/.smartteleprompter/autosave/{session_id}.txt
+        - sessions.json 同時寫一次以保留標註/格式/位置等狀態
+        """
+        if not hasattr(self, "session_manager"):
+            return
+        # 1) 把所有 dirty session 的講稿寫回原檔（或 autosave 目錄）
+        any_saved = False
+        for session in self.session_manager.sessions:
+            if not session.dirty:
+                continue
+            text = session.modified_text or ""
+            if not text.strip():
+                continue
+            target = session.transcript_path
+            try:
+                if target and Path(target).parent.exists():
+                    Path(target).write_text(text, encoding="utf-8")
+                else:
+                    # 無原檔 → 寫到 autosave 目錄
+                    autosave_dir = default_sessions_path().parent / "autosave"
+                    autosave_dir.mkdir(parents=True, exist_ok=True)
+                    autosave_path = autosave_dir / f"{session.id}.txt"
+                    autosave_path.write_text(text, encoding="utf-8")
+                    if not session.transcript_path:
+                        session.transcript_path = str(autosave_path)
+                session.dirty = False
+                session.modified_text = ""
+                any_saved = True
+            except Exception as e:
+                logger.warning("自動儲存講稿失敗 (%s): %s", session.title, e)
+        # 2) sessions.json：保留標註/位置/格式
+        try:
+            # 同步當前 active session 的 annotations 進去
+            active = self.session_manager.active
+            if active is not None and hasattr(self, "slide_mode_view"):
+                slide_anns = [
+                    a for a in self.slide_mode_view.annotations() if a.anchor == "slide"
+                ]
+                doc_anns = [a for a in self.view.annotations() if a.anchor == "doc"]
+                active.annotations = slide_anns + doc_anns
+            self.session_manager.save_to_disk(default_sessions_path())
+        except Exception as e:
+            logger.warning("自動儲存 sessions.json 失敗: %s", e)
+        if any_saved and hasattr(self, "status_recognized"):
+            from datetime import datetime
+            self.status_recognized.setText(
+                f"💾 已自動儲存 {datetime.now().strftime('%H:%M:%S')}"
+            )
         self.status_recognized.setText("✅ 已套用修改後的講稿（未儲存到原檔，可按 Ctrl+S）")
 
     def _on_font_size_spinbox(self, size: int) -> None:
@@ -2800,6 +3093,16 @@ class MainWindow(QMainWindow):
             current=self.cfg.highlight_color,
             skipped=self.cfg.skipped_color,
         )
+        # SlideModeView 同步：字體 + karaoke 全套色
+        self.slide_mode_view.set_font_family(self.cfg.font_family)
+        self.slide_mode_view.set_font_size(self.cfg.font_size)
+        self.slide_mode_view.set_line_spacing(self.cfg.line_spacing)
+        self.slide_mode_view.set_colors(
+            spoken=self.cfg.spoken_color,
+            upcoming=self.cfg.upcoming_color,
+            current=self.cfg.highlight_color,
+            skipped=self.cfg.skipped_color,
+        )
         self.timer_ctrl.set_target_seconds(self.cfg.target_duration_sec)
         self.timer_ctrl.set_milestones(self.cfg.milestone_marks_sec)
         # 套用穩定性模式 + 最大跳段範圍（所有 session 的 engine 都要同步）
@@ -2824,9 +3127,20 @@ class MainWindow(QMainWindow):
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
-        # 遮罩跟著 view 同大小
+        # 遮罩跟著 stack 同大小（直屏 slide 模式也看得到）
         if hasattr(self, "loading_overlay") and self.loading_overlay.isVisible():
-            self.loading_overlay.resize(self.view.size())
+            self.loading_overlay.resize(self._content_stack.size())
+        # 收合縮圖時的浮動展開按鈕也要跟著 splitter 重定位
+        if (
+            hasattr(self, "_btn_expand_thumb")
+            and self._btn_expand_thumb.isVisible()
+            and hasattr(self, "content_splitter")
+        ):
+            target = self.content_splitter
+            top_left = target.mapTo(self, target.rect().topLeft())
+            self._btn_expand_thumb.move(
+                top_left.x(), top_left.y() + target.height() // 2 - 20
+            )
         # 直屏/橫屏自適應
         self._apply_orientation_layout()
 

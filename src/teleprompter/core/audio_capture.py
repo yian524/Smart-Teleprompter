@@ -111,41 +111,37 @@ class AudioCaptureWorker(QObject):
             self.error.emit(f"VAD 初始化失敗: {e}")
             return
 
-        try:
-            extra = None
-            device_to_use = self.device
-            source_label = "麥克風"
-            if self.loopback:
-                # 嘗試 WASAPI loopback：抓系統輸出裝置（對應「喇叭端」聲音）
-                # 要求：Windows + sounddevice 新版（支援 WasapiSettings.loopback=True）
-                try:
-                    wasapi_idx = next(
-                        i for i, h in enumerate(sd.query_hostapis())
-                        if "WASAPI" in h.get("name", "")
-                    )
-                    out_dev = sd.query_hostapis(wasapi_idx).get("default_output_device", -1)
-                    if out_dev >= 0:
-                        device_to_use = out_dev
-                        extra = sd.WasapiSettings(loopback=True)
-                        source_label = "系統輸出 (loopback)"
-                    else:
-                        logger.warning("找不到 WASAPI default output → 退回麥克風")
-                except Exception as e:
-                    logger.warning("WASAPI loopback 初始化失敗，退回麥克風: %s", e)
-            self._stream = sd.RawInputStream(
-                samplerate=SAMPLE_RATE,
-                blocksize=FRAME_SAMPLES,
-                device=device_to_use,
-                channels=1,
-                dtype="int16",
-                callback=self._on_audio,
-                extra_settings=extra,
-            )
-            self._stream.start()
-            logger.info("音訊輸入：%s (device=%s)", source_label, device_to_use)
-        except Exception as e:
-            self.error.emit(f"無法開啟音訊輸入: {e}")
-            return
+        # === 麥克風路徑（預設）===
+        device_to_use = self.device
+        source_label = "麥克風"
+        self._capture_channels = 1
+        self._capture_rate = SAMPLE_RATE
+        self._resample_buffer = np.zeros(0, dtype=np.float32)
+
+        # === WASAPI loopback 路徑：多組參數 fallback ===
+        if self.loopback:
+            opened = self._try_open_wasapi_loopback(sd)
+            if opened:
+                source_label = f"系統輸出 (loopback, ch={self._capture_channels}, rate={self._capture_rate})"
+                logger.info("音訊輸入：%s", source_label)
+            else:
+                logger.warning("WASAPI loopback 全部 fallback 失敗 → 退回麥克風")
+        # 若 loopback 失敗或未啟用 → 開麥克風（mono 16k）
+        if getattr(self, "_stream", None) is None:
+            try:
+                self._stream = sd.RawInputStream(
+                    samplerate=SAMPLE_RATE,
+                    blocksize=FRAME_SAMPLES,
+                    device=device_to_use,
+                    channels=1,
+                    dtype="int16",
+                    callback=self._on_audio,
+                )
+                self._stream.start()
+                logger.info("音訊輸入：%s (device=%s)", source_label, device_to_use)
+            except Exception as e:
+                self.error.emit(f"無法開啟音訊輸入: {e}")
+                return
 
         self._last_emit_t = time.monotonic()
         try:
@@ -159,48 +155,136 @@ class AudioCaptureWorker(QObject):
             except Exception:
                 pass
 
+    def _try_open_wasapi_loopback(self, sd) -> bool:
+        """嘗試多組 (channels, samplerate) 開 WASAPI loopback；找到第一個可用設定。
+
+        WASAPI loopback 的 -9998 來源很多：
+        - 有些 driver 不接受 max_output_channels 報的數字（如 7.1 報 8 但實際只接受 2）
+        - samplerate 必須 match 系統「Windows 音訊 → 進階 → 預設格式」
+        - blocksize 給太小會被拒絕
+        所以乾脆按優先序試多組常見組合，第一個 .start() 成功就用它。
+        """
+        try:
+            wasapi_idx = next(
+                i for i, h in enumerate(sd.query_hostapis())
+                if "WASAPI" in h.get("name", "")
+            )
+        except StopIteration:
+            return False
+        out_dev = sd.query_hostapis(wasapi_idx).get("default_output_device", -1)
+        if out_dev < 0:
+            return False
+        # 取裝置回報的「期望」設定當第一順位
+        try:
+            dev_info = sd.query_devices(out_dev)
+            preferred_ch = max(1, int(dev_info.get("max_output_channels", 2)))
+            preferred_sr = int(dev_info.get("default_samplerate", 48000))
+        except Exception:
+            preferred_ch, preferred_sr = 2, 48000
+        # 候選組合（去重保留順序）
+        candidates: list[tuple[int, int]] = []
+        for ch in (preferred_ch, 2, 1):
+            for sr in (preferred_sr, 48000, 44100):
+                key = (ch, sr)
+                if key not in candidates:
+                    candidates.append(key)
+        extra = sd.WasapiSettings(loopback=True)
+        for ch, sr in candidates:
+            try:
+                stream = sd.RawInputStream(
+                    samplerate=sr,
+                    blocksize=0,                 # let driver pick native
+                    device=out_dev,
+                    channels=ch,
+                    dtype="int16",
+                    callback=self._on_audio,
+                    extra_settings=extra,
+                )
+                stream.start()
+                self._stream = stream
+                self._capture_channels = ch
+                self._capture_rate = sr
+                logger.info(
+                    "WASAPI loopback opened: device=%s ch=%d rate=%d", out_dev, ch, sr
+                )
+                return True
+            except Exception as e:
+                logger.warning(
+                    "loopback try (ch=%d, rate=%d) 失敗: %s", ch, sr, e
+                )
+                continue
+        return False
+
     def _on_audio(self, indata, frames, time_info, status) -> None:
         if status:
             logger.debug("audio status: %s", status)
         try:
-            raw = bytes(indata)
-            samples = np.frombuffer(raw, dtype=np.int16)
-            # Tap：原始音訊給錄音功能（不影響後續辨識流程）
-            try:
-                self.raw_frame.emit(raw)
-            except Exception:
-                pass
+            raw_in = bytes(indata)
+            ch = getattr(self, "_capture_channels", 1)
+            cap_rate = getattr(self, "_capture_rate", SAMPLE_RATE)
 
-            # 音量回饋
-            if len(samples) > 0:
-                rms = float(np.sqrt(np.mean(samples.astype(np.float32) ** 2)))
-                level = min(1.0, rms / 8000.0)
-                self.level_changed.emit(level)
+            # ---- Fast path：mic 模式（已是 mono 16k 30ms frame）→ 直接 emit ----
+            # 不做 concat / astype，避免每 30ms 重複拷貝陣列
+            if ch == 1 and cap_rate == SAMPLE_RATE and len(raw_in) == FRAME_SAMPLES * 2:
+                samples_view = np.frombuffer(raw_in, dtype=np.int16)
+                self._process_mono_16k_frame(raw_in, samples_view)
+                return
 
-            # VAD（在 audio thread 跑，計算很輕）
-            try:
-                is_speech = self._vad.is_speech(raw, SAMPLE_RATE)
-            except Exception:
-                is_speech = False
-
-            if is_speech:
-                self._frames_since_voice = 0
-                self._silence_ms = 0
-                self._has_voice_in_window = True
-            else:
-                self._frames_since_voice += 1
-                self._silence_ms += FRAME_DURATION_MS
-
-            # 累入 ring buffer（加鎖避免與主線程讀取競態）
-            with self._buffer_lock:
-                self._buffer.extend(samples.astype(np.float32) / 32768.0)
-
-            # 偵測「夠長靜音」→ 標記下次發送為 boundary，並清空 buffer
-            if self._has_voice_in_window and self._silence_ms >= SILENCE_RESET_MS:
-                self._boundary_pending = True
-                self._has_voice_in_window = False
+            # ---- Slow path：loopback / 任意 blocksize → 降混 + 重採樣 + 對齊 30ms frame ----
+            samples = np.frombuffer(raw_in, dtype=np.int16)
+            # 1) 多聲道（loopback stereo）→ 降混為 mono
+            if ch > 1 and len(samples) >= ch:
+                trimmed = samples[: (len(samples) // ch) * ch]
+                samples = (
+                    trimmed.reshape(-1, ch).astype(np.int32).mean(axis=1).astype(np.int16)
+                )
+            # 2) 重採樣到 16kHz
+            if cap_rate != SAMPLE_RATE and len(samples) > 0:
+                ratio = SAMPLE_RATE / cap_rate
+                new_len = int(len(samples) * ratio)
+                if new_len > 0:
+                    x_old = np.linspace(0, 1, len(samples), endpoint=False)
+                    x_new = np.linspace(0, 1, new_len, endpoint=False)
+                    samples = np.interp(x_new, x_old, samples).astype(np.int16)
+            # 3) 切成 30ms frame 餵 webrtcvad
+            self._resample_buffer = np.concatenate([self._resample_buffer, samples])
+            n_frames = len(self._resample_buffer) // FRAME_SAMPLES
+            if n_frames == 0:
+                return
+            consumed = n_frames * FRAME_SAMPLES
+            for fi in range(n_frames):
+                frame = self._resample_buffer[fi * FRAME_SAMPLES:(fi + 1) * FRAME_SAMPLES].astype(np.int16)
+                self._process_mono_16k_frame(frame.tobytes(), frame)
+            self._resample_buffer = self._resample_buffer[consumed:]
         except Exception as e:
             logger.exception("audio callback error: %s", e)
+
+    def _process_mono_16k_frame(self, raw: bytes, samples: np.ndarray) -> None:
+        """處理已對齊到「mono 16kHz 30ms」的單一 frame：tap / 音量 / VAD / buffer / 邊界。"""
+        try:
+            self.raw_frame.emit(raw)
+        except Exception:
+            pass
+        if len(samples) > 0:
+            rms = float(np.sqrt(np.mean(samples.astype(np.float32) ** 2)))
+            level = min(1.0, rms / 8000.0)
+            self.level_changed.emit(level)
+        try:
+            is_speech = self._vad.is_speech(raw, SAMPLE_RATE)
+        except Exception:
+            is_speech = False
+        if is_speech:
+            self._frames_since_voice = 0
+            self._silence_ms = 0
+            self._has_voice_in_window = True
+        else:
+            self._frames_since_voice += 1
+            self._silence_ms += FRAME_DURATION_MS
+        with self._buffer_lock:
+            self._buffer.extend(samples.astype(np.float32) / 32768.0)
+        if self._has_voice_in_window and self._silence_ms >= SILENCE_RESET_MS:
+            self._boundary_pending = True
+            self._has_voice_in_window = False
 
     def _maybe_emit(self) -> None:
         now = time.monotonic()

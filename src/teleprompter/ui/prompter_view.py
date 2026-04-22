@@ -441,25 +441,51 @@ class PrompterView(QTextEdit):
         self.setFocus()
 
     def mark_skipped(self, start: int, end: int) -> None:
-        """把 [start, end) 標為「漏講」（亮紅 + 紅背景 + 刪除線），並記錄起來避免後續推進蓋掉。"""
+        """把 [start, end) 標為「漏講」（亮紅 + 紅背景 + 刪除線），並記錄起來避免後續推進蓋掉。
+
+        會自動跳過 MD 保護區（標題、---/===/***、`<!-- -->` 註解），讓備忘文字保留原樣式。
+        """
         if self._doc_length <= 0:
             return
         start = max(0, min(start, self._doc_length))
         end = max(0, min(end, self._doc_length))
         if end <= start:
             return
-        cursor = QTextCursor(self.document())
-        cursor.setPosition(start)
-        cursor.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
-        fmt = QTextCharFormat()
-        fmt.setForeground(self._color_skipped)
-        fmt.setBackground(self._color_skipped_bg)
-        fmt.setFontStrikeOut(True)
-        cursor.mergeCharFormat(fmt)
-        self._skipped_ranges.append((start, end))
+        # 把 [start, end) 切成「不含 MD 保護區」的子段，逐段套漏講樣式
+        sub_ranges = list(self._iter_skippable(start, end))
+        if not sub_ranges:
+            return
+        for s, e in sub_ranges:
+            cursor = QTextCursor(self.document())
+            cursor.setPosition(s)
+            cursor.setPosition(e, QTextCursor.MoveMode.KeepAnchor)
+            fmt = QTextCharFormat()
+            fmt.setForeground(self._color_skipped)
+            fmt.setBackground(self._color_skipped_bg)
+            fmt.setFontStrikeOut(True)
+            cursor.mergeCharFormat(fmt)
+            self._skipped_ranges.append((s, e))
         self._skipped_ranges = self._merge_ranges(self._skipped_ranges)
         # 強制重繪以確保視覺立即更新
         self.viewport().update()
+
+    def _iter_skippable(self, start: int, end: int):
+        """產生 [start, end) 中可被標漏講的子段（排除 MD 保護區，例如 `<!-- -->`）。"""
+        md = getattr(self, "_md_styled_ranges", []) or []
+        excluded = self._merge_ranges(md)
+        cur = start
+        for s, e in excluded:
+            if e <= cur:
+                continue
+            if s >= end:
+                break
+            if s > cur:
+                yield (cur, min(s, end))
+            cur = max(cur, e)
+            if cur >= end:
+                return
+        if cur < end:
+            yield (cur, end)
 
     def mark_skipped_ranges(self, ranges: list[tuple[int, int]]) -> int:
         """批次標多個漏講區段；回傳實際標記的總字數。"""
@@ -822,13 +848,22 @@ class PrompterView(QTextEdit):
                 )
                 for s, e in self._iter_unskipped(old, old_end):
                     self._apply_format_range(s, e, target_color)
-        # 2. 套新 marker（跳過 MD 保護區段）
-        end = min(self._doc_length, pos + marker_len)
-        if pos < end:
-            in_md = any(s <= pos < e for s, e in self._md_styled_ranges)
-            if not in_md:
-                self._apply_format_range(pos, end, self._color_current)
-        self._last_marker_pos = pos
+        # 2. 套新 marker：若 pos 落在 MD 保護區（標題/註解/分隔線），往後找第一個非 MD 位置
+        # 修正「卡拉OK 開頭沒提詞效果」：第一句若以 <!-- 備忘 --> 開頭，sentence.start 會落在
+        # 註解上 → 黃色 marker 完全畫不出來。bump 過去就會出現在「真正講稿」第一個字上。
+        adjusted_pos = pos
+        if self._md_styled_ranges:
+            # 線性掃即可（MD 區段通常 < 100 個）
+            for s, e in self._md_styled_ranges:
+                if s <= adjusted_pos < e:
+                    adjusted_pos = e
+                else:
+                    if s > adjusted_pos:
+                        break
+        end = min(self._doc_length, adjusted_pos + marker_len)
+        if adjusted_pos < end:
+            self._apply_format_range(adjusted_pos, end, self._color_current)
+        self._last_marker_pos = adjusted_pos
 
     # ---------- 編輯時 MD 即時刷新 ----------
 

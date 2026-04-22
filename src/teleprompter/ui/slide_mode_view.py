@@ -196,6 +196,16 @@ class SlideModeView(QWidget):
         self._font_size = 36
         self._line_spacing = 1.6
 
+        # ==== Karaoke 提詞效果（與 PrompterView 同步顯示）====
+        # 全文 char 位置；spoken = [0, _karaoke_pos)、current = 2 字 marker、upcoming = 其餘
+        self._karaoke_pos: int = 0
+        self._skipped_ranges: list[tuple[int, int]] = []   # 全文 char 範圍
+        self._color_spoken = QColor("#6B6B6B")
+        self._color_upcoming = QColor("#F0F0F0")           # = _text_color 預設
+        self._color_current = QColor("#FFD54A")
+        self._color_skipped = QColor("#FF1744")
+        self._color_skipped_bg = QColor(255, 23, 68, 60)
+
         # 文字／投影片 splitter 狀態
         # - 橫屏：_text_ratio = 左欄文字寬度比例
         # - 直屏：_text_ratio = 下方文字高度比例
@@ -360,14 +370,44 @@ class SlideModeView(QWidget):
         *,
         background: Optional[str] = None,
         upcoming: Optional[str] = None,
+        spoken: Optional[str] = None,
+        current: Optional[str] = None,
+        skipped: Optional[str] = None,
         **_ignored,
     ) -> None:
         if background:
             self._bg_color = QColor(background)
         if upcoming:
             self._text_color = QColor(upcoming)
+            self._color_upcoming = QColor(upcoming)
+        if spoken:
+            self._color_spoken = QColor(spoken)
+        if current:
+            self._color_current = QColor(current)
+        if skipped:
+            self._color_skipped = QColor(skipped)
+            c = QColor(skipped)
+            self._color_skipped_bg = QColor(c.red(), c.green(), c.blue(), 60)
         self._apply_palette()
         self.update()
+
+    def set_karaoke_position(self, global_char: int) -> None:
+        """更新 karaoke 位置（已念到全文哪個 char），會觸發重繪。"""
+        new_pos = max(0, int(global_char))
+        if new_pos != self._karaoke_pos:
+            self._karaoke_pos = new_pos
+            self.update()
+
+    def karaoke_position(self) -> int:
+        return self._karaoke_pos
+
+    def set_skipped_ranges(self, ranges: list[tuple[int, int]]) -> None:
+        """設定漏講範圍（全文 char）— 會在當前頁有重疊時畫紅刪除線。"""
+        norm = [(int(s), int(e)) for s, e in ranges if e > s]
+        norm.sort()
+        if norm != self._skipped_ranges:
+            self._skipped_ranges = norm
+            self.update()
 
     # ---------- 內部：資料預處理 ----------
 
@@ -1054,6 +1094,9 @@ class SlideModeView(QWidget):
         if page_spans:
             restore_formats(doc, page_spans)
 
+        # 套 karaoke：spoken/current/skipped 三層著色（跳過 MD 保護區）
+        self._apply_karaoke_to_doc(doc, start_char, end_char)
+
         # 垂直置中（若內容高度 < rect.height()）
         doc_h = doc.size().height()
         y_offset = 0
@@ -1132,8 +1175,199 @@ class SlideModeView(QWidget):
             )
             if char_fmt is not None:
                 cursor.mergeCharFormat(char_fmt)
+            else:
+                # 非全行 MD → 對 inline 註解套灰斜體
+                # （與 PrompterView._apply_markdown_rendering 一致；同步直/橫屏視覺）
+                import re as _re
+                inline_re = _re.compile(r"<!--.*?-->", _re.DOTALL)
+                inline_fmt = QTextCharFormat()
+                inline_fmt.setForeground(QColor("#707070"))
+                inline_fmt.setFontItalic(True)
+                text = block.text()
+                for m in inline_re.finditer(text):
+                    c = QTextCursor(block)
+                    c.setPosition(block.position() + m.start())
+                    c.setPosition(
+                        block.position() + m.end(),
+                        QTextCursor.MoveMode.KeepAnchor,
+                    )
+                    c.mergeCharFormat(inline_fmt)
             cursor.setBlockFormat(block_fmt)
             block = block.next()
+
+    # ---------- Karaoke 渲染 ----------
+
+    def _apply_karaoke_to_doc(
+        self, doc: QTextDocument, page_start_char: int, page_end_char: int
+    ) -> None:
+        """對 doc 套 spoken/current/skipped 三層著色，跳過 MD 保護區（標題/註解/分隔線）。
+
+        - 全文 char position → 換算成 doc-local（doc 內容是 page_text，offset 從 0 開始）
+        - spoken: [0, local_pos)  → 灰色
+        - current: [local_pos, local_pos+2) → 黃色（落在 MD 區則往後 bump 到第一個非 MD）
+        - skipped: 各個與本頁重疊的範圍 → 紅色 + 紅背景 + 刪除線
+        - 排除 MD 保護區，讓註解保留灰斜體不被覆蓋
+        """
+        page_len = page_end_char - page_start_char
+        if page_len <= 0:
+            return
+        local_pos = max(0, min(page_len, self._karaoke_pos - page_start_char))
+        md_ranges = self._md_ranges_in_doc(doc)
+        local_skipped = self._local_skipped_ranges(page_start_char, page_end_char)
+
+        # 1) spoken：[0, local_pos) 排除 MD + skipped
+        if local_pos > 0:
+            for s, e in self._iter_excluding(0, local_pos, md_ranges + local_skipped):
+                self._merge_color(doc, s, e, self._color_spoken)
+
+        # 2) skipped：每段排除 MD
+        for ss, se in local_skipped:
+            for s, e in self._iter_excluding(ss, se, md_ranges):
+                self._merge_color(doc, s, e, self._color_skipped,
+                                  strike=True, bg=self._color_skipped_bg)
+
+        # 3) current marker：只在「引擎已進入本頁」時才畫
+        # 若 _karaoke_pos < page_start_char（引擎還在前面的頁），不畫 marker
+        if self._karaoke_pos < page_start_char:
+            return
+        # 從 local_pos 開始往前逐字掃，跳過 MD 範圍與空白字元，找第一個可見非 MD 字元
+        # 修正前一版的 bug：marker 緊鄰 <!-- 之前時，bump 不觸發但 marker+2 會蓋到 <
+        text = doc.toPlainText()
+        text_len = len(text)
+        pos = local_pos
+        # 安全上限：避免任何無預期循環
+        for _ in range(text_len + 1):
+            if pos >= text_len:
+                break
+            # 跳 MD
+            in_md = False
+            for ms, me in md_ranges:
+                if ms <= pos < me:
+                    pos = me
+                    in_md = True
+                    break
+                if ms > pos:
+                    break
+            if in_md:
+                continue
+            # 跳空白（含 \n、\r、tab、半形空白）
+            if text[pos].isspace():
+                pos += 1
+                continue
+            break
+        marker = pos
+        # marker_end 也要避免延伸到 MD 或空白上 → 一字一字走，遇 MD/空白就停
+        marker_end = marker
+        marker_limit = min(page_len, text_len, marker + 2)
+        while marker_end < marker_limit:
+            ch = text[marker_end]
+            if ch.isspace():
+                break
+            in_md = False
+            for ms, me in md_ranges:
+                if ms <= marker_end < me:
+                    in_md = True
+                    break
+                if ms > marker_end:
+                    break
+            if in_md:
+                break
+            marker_end += 1
+        if marker < marker_end:
+            self._merge_color(doc, marker, marker_end, self._color_current)
+
+    def _md_ranges_in_doc(self, doc: QTextDocument) -> list[tuple[int, int]]:
+        """掃 doc 找所有 MD 保護區段（標題行、---/===/***、整行/inline `<!-- -->`）。"""
+        import re as _re
+        inline_re = _re.compile(r"<!--.*?-->", _re.DOTALL)
+        out: list[tuple[int, int]] = []
+        block = doc.firstBlock()
+        while block.isValid():
+            text = block.text()
+            stripped = text.strip()
+            bp = block.position()
+            if (
+                stripped.startswith(("# ", "## ", "### "))
+                or stripped in ("---", "===", "***")
+                or (stripped.startswith("<!--") and stripped.endswith("-->"))
+            ):
+                be = bp + block.length() - 1
+                if be > bp:
+                    out.append((bp, be))
+            else:
+                for m in inline_re.finditer(text):
+                    out.append((bp + m.start(), bp + m.end()))
+            block = block.next()
+        return self._merge_ranges(out)
+
+    def _local_skipped_ranges(
+        self, page_start_char: int, page_end_char: int
+    ) -> list[tuple[int, int]]:
+        """把全文 skipped ranges 截到本頁，回傳 doc-local offset。"""
+        out: list[tuple[int, int]] = []
+        for gs, ge in self._skipped_ranges:
+            if ge <= page_start_char or gs >= page_end_char:
+                continue
+            ls = max(0, gs - page_start_char)
+            le = min(page_end_char - page_start_char, ge - page_start_char)
+            if le > ls:
+                out.append((ls, le))
+        return out
+
+    @staticmethod
+    def _merge_ranges(ranges: list[tuple[int, int]]) -> list[tuple[int, int]]:
+        if not ranges:
+            return []
+        ranges = sorted(ranges)
+        merged = [ranges[0]]
+        for s, e in ranges[1:]:
+            ls, le = merged[-1]
+            if s <= le:
+                merged[-1] = (ls, max(le, e))
+            else:
+                merged.append((s, e))
+        return merged
+
+    @staticmethod
+    def _iter_excluding(start: int, end: int, excluded: list[tuple[int, int]]):
+        """產生 [start, end) 中排除 excluded 後的子段。"""
+        excluded = sorted(excluded)
+        cur = start
+        for s, e in excluded:
+            if e <= cur:
+                continue
+            if s >= end:
+                break
+            if s > cur:
+                yield (cur, min(s, end))
+            cur = max(cur, e)
+            if cur >= end:
+                return
+        if cur < end:
+            yield (cur, end)
+
+    def _merge_color(
+        self,
+        doc: QTextDocument,
+        start: int,
+        end: int,
+        color: QColor,
+        *,
+        strike: bool = False,
+        bg: Optional[QColor] = None,
+    ) -> None:
+        if end <= start:
+            return
+        cursor = QTextCursor(doc)
+        cursor.setPosition(start)
+        cursor.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
+        fmt = QTextCharFormat()
+        fmt.setForeground(color)
+        if strike:
+            fmt.setFontStrikeOut(True)
+        if bg is not None:
+            fmt.setBackground(bg)
+        cursor.mergeCharFormat(fmt)
 
     def _paint_slide(self, painter: QPainter, rect: QRect, page_idx: int) -> None:
         if self._slide_deck is None or rect.width() <= 0 or rect.height() <= 0:
