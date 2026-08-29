@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Teleprompter 工具列規格提案</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&display=swap">
+<style>
+:root{
+  --ground:#eef0f3; --card:#ffffff; --ink:#1a1d21; --muted:#5c6470; --faint:#8b93a0;
+  --line:#dde1e7; --line-2:#e8ebef;
+  --accent:#2f6fed; --accent-dim:#dce7fb;
+  /* app mock（深色 chrome，貼近實品） */
+  --w-title:#2a2d31; --w-menu:#232629; --w-bar:#26292e; --w-bar2:#1f2226;
+  --w-canvas:#17191c; --w-line:#383c42; --w-ink:#d6d9de; --w-muted:#8f959e; --w-faint:#5d636b;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--ground);color:var(--ink);
+  font-family:'Segoe UI','Noto Sans TC','Microsoft JhengHei',sans-serif;
+  font-size:14.5px;line-height:1.7;padding-bottom:88px}
+.wrap{max-width:1080px;margin:0 auto;padding:0 32px}
+
+/* ── page header：規格書格式 ── */
+.doc-head{background:var(--card);border-bottom:1px solid var(--line);padding:40px 0 30px;margin-bottom:40px}
+.doc-meta{display:flex;gap:28px;font-size:12px;color:var(--faint);margin-bottom:14px}
+.doc-meta b{color:var(--muted);font-weight:600}
+h1{font-size:27px;font-weight:700;letter-spacing:.01em}
+.doc-sub{color:var(--muted);margin-top:8px;max-width:52em}
+.doc-sub b{color:var(--ink);font-weight:600}
+
+/* ── sections ── */
+section{margin-bottom:64px}
+.sec-head{display:flex;align-items:baseline;gap:12px;margin-bottom:6px}
+.sec-no{font-size:12px;font-weight:700;color:var(--accent);letter-spacing:.06em}
+h2{font-size:20px;font-weight:700}
+.rec{font-size:11.5px;font-weight:600;color:var(--accent);background:var(--accent-dim);
+  padding:2px 10px;border-radius:3px;margin-left:auto;white-space:nowrap}
+.sec-desc{color:var(--muted);max-width:56em;margin:6px 0 20px}
+.sec-desc b{color:var(--ink);font-weight:600}
+.state-label{font-size:12px;font-weight:600;color:var(--muted);margin:20px 0 8px;
+  display:flex;align-items:center;gap:8px}
+.state-label::before{content:"";width:8px;height:8px;border:2px solid var(--accent);border-radius:2px}
+
+/* ── window mock ── */
+.win{background:var(--w-canvas);border:1px solid #c9ced6;border-radius:6px;overflow:hidden;
+  box-shadow:0 1px 3px rgba(26,29,33,.10),0 8px 28px rgba(26,29,33,.08)}
+.w-title{display:flex;align-items:center;background:var(--w-title);height:32px;padding-left:12px;
+  font-size:12px;color:var(--w-muted)}
+.w-title .app-ic{width:14px;height:14px;border-radius:3px;background:var(--accent);margin-right:8px;flex:none}
+.w-caps{margin-left:auto;display:flex;height:100%}
+.w-caps span{width:42px;display:flex;align-items:center;justify-content:center;color:var(--w-muted);font-size:10px}
+.w-caps span:last-child:hover{background:#c42b1c}
+.w-menu{display:flex;gap:2px;background:var(--w-menu);padding:2px 8px;font-size:12px;color:var(--w-muted);
+  border-bottom:1px solid #34383e}
+.w-menu span{padding:3px 9px;border-radius:3px}
+
+/* toolbar */
+.bar{display:flex;align-items:center;gap:2px;background:var(--w-bar);padding:5px 8px;flex-wrap:wrap;min-height:42px}
+.btn{display:inline-flex;align-items:center;gap:7px;padding:6px 10px;border-radius:4px;
+  font-size:12.5px;color:var(--w-ink);white-space:nowrap;border:1px solid transparent}
+.btn svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.6;
+  stroke-linecap:round;stroke-linejoin:round;flex:none}
+.btn.ic-only{padding:6px 8px}
+.btn.primary{background:var(--accent);color:#fff;font-weight:600;padding:6px 14px}
+.btn.quiet{color:var(--w-muted)}
+.btn.active{background:#33373d;border-color:#454a52;color:#fff}
+.vsep{width:1px;height:22px;background:var(--w-line);margin:0 7px;flex:none}
+.grow{flex:1}
+.field{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--w-ink);
+  background:#1d2024;border:1px solid var(--w-line);border-radius:4px;padding:4px 10px}
+.field svg{width:14px;height:14px;stroke:var(--w-muted);fill:none;stroke-width:1.6;stroke-linecap:round}
+.field .unit{color:var(--w-faint)}
+/* 模組開關（switch） */
+.sw{display:inline-flex;align-items:center;gap:8px;padding:5px 10px;border-radius:4px;font-size:12.5px;color:var(--w-muted)}
+.sw .tr{width:26px;height:15px;border-radius:8px;background:#3a3e44;position:relative;flex:none;transition:none}
+.sw .tr::after{content:"";position:absolute;top:2px;left:2px;width:11px;height:11px;border-radius:50%;background:#7c828b}
+.sw.on{color:#fff}
+.sw.on .tr{background:var(--accent)}
+.sw.on .tr::after{left:13px;background:#fff}
+/* 模組列 */
+.mod{display:flex;align-items:center;gap:2px;background:var(--w-bar2);padding:5px 8px 5px 0;
+  border-top:1px solid #303439;flex-wrap:wrap;min-height:40px}
+.mod .tag{display:flex;align-items:center;gap:8px;align-self:stretch;padding:0 14px 0 11px;margin-right:6px;
+  border-left:3px solid var(--accent);color:var(--w-ink);font-size:12px;font-weight:600}
+.mod .tag small{color:var(--w-faint);font-weight:400;font-size:10.5px;letter-spacing:.08em}
+.kbd{font-family:Consolas,monospace;font-size:10.5px;color:var(--w-faint);
+  border:1px solid var(--w-line);border-radius:3px;padding:0 5px;margin-left:2px}
+/* 色票（標註模組用，中性呈現） */
+.swatch{width:14px;height:14px;border-radius:3px;border:1px solid rgba(255,255,255,.25);display:inline-block}
+/* canvas */
+.cv{display:flex;min-height:112px}
+.cv .script{flex:1;padding:14px 18px;color:var(--w-faint);font-size:13px;line-height:1.9}
+.cv .script .lit{color:var(--w-ink)}
+.cv .script .dim{color:#6d737c}
+.cv .slide{width:216px;background:#fff;margin:12px 14px;border-radius:2px;padding:14px 12px;
+  display:flex;flex-direction:column;gap:7px}
+.cv .slide i{display:block;height:7px;border-radius:1px;background:#e3e6ea}
+.cv .slide i:first-child{width:70%;height:10px;background:#c9ced6}
+.cv .slide i:nth-child(3){width:85%}
+.cv .slide i:nth-child(4){width:60%}
+.cv .slide em{margin-top:auto;font-style:normal;font-size:10px;color:#a6adb8;text-align:right}
+/* rail（方案二） */
+.railwrap{display:flex}
+.rail{width:44px;background:#202327;border-right:1px solid #303439;display:flex;flex-direction:column;align-items:center;padding:8px 0;gap:2px}
+.rail .r{width:100%;height:40px;display:flex;align-items:center;justify-content:center;color:var(--w-muted);position:relative}
+.rail .r svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.rail .r.cur{color:#fff;background:#2a2e33}
+.rail .r.cur::before{content:"";position:absolute;left:0;top:8px;bottom:8px;width:2px;background:var(--accent)}
+.rail .sp{flex:1}
+.railmain{flex:1;min-width:0}
+/* 膠囊（方案三） */
+.grp{display:inline-flex;align-items:center;gap:1px;border:1px solid var(--w-line);border-radius:4px;
+  padding:1px;margin-left:8px;background:#1d2024}
+.grp .gl{font-size:10.5px;font-weight:600;color:var(--w-muted);padding:0 8px;letter-spacing:.06em}
+.grp .btn{padding:4px 7px}
+.grp .btn svg{width:15px;height:15px}
+
+/* ── 表格 ── */
+.card{background:var(--card);border:1px solid var(--line);border-radius:6px;overflow:hidden;margin-top:22px}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th{font-size:11px;font-weight:700;letter-spacing:.07em;color:var(--faint);text-transform:uppercase;
+  text-align:left;padding:10px 16px;background:#f7f8fa;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:9px 16px;border-bottom:1px solid var(--line-2);vertical-align:top;color:#3a4048}
+tr:last-child td{border-bottom:none}
+td:first-child{white-space:nowrap;color:var(--ink);font-weight:600}
+.tnote{color:var(--faint);font-size:12.5px;margin-top:10px}
+.pill{display:inline-block;font-size:11px;font-weight:600;color:var(--accent);background:var(--accent-dim);
+  border-radius:3px;padding:1px 8px}
+/* verdict */
+.verdict{background:var(--card);border:1px solid var(--line);border-left:3px solid var(--accent);
+  border-radius:6px;padding:20px 24px;margin-top:6px}
+.verdict h3{font-size:15px;margin-bottom:6px}
+.verdict p{color:var(--muted);font-size:13.5px}
+.verdict b{color:var(--ink);font-weight:600}
+@media(max-width:760px){.cv .slide{display:none}}
+</style>
+</head>
+<body>
+
+<!-- ══ SVG icon sprite（線性、16 格、stroke 1.6）══ -->
+<svg width="0" height="0" style="position:absolute">
+  <symbol id="i-play" viewBox="0 0 16 16"><path d="M4.5 3.2v9.6L12.8 8z"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 16 16"><path d="M1.8 4.2c0-.6.4-1 1-1h3.4l1.5 1.6h5.5c.6 0 1 .4 1 1v6c0 .6-.4 1-1 1H2.8c-.6 0-1-.4-1-1z"/></symbol>
+  <symbol id="i-slides" viewBox="0 0 16 16"><rect x="1.8" y="3" width="12.4" height="9" rx="1"/><path d="M5.5 12v1.8M10.5 12v1.8M4.5 9.5l2.4-2.6 1.8 1.7 2.8-3"/></symbol>
+  <symbol id="i-locate" viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.6v2.2M8 12.2v2.2M1.6 8h2.2M12.2 8h2.2"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M8 4.6V8l2.3 1.5"/></symbol>
+  <symbol id="i-reset" viewBox="0 0 16 16"><path d="M2.6 6.5A6 6 0 1 1 2 9.5M2.6 3v3.5H6"/></symbol>
+  <symbol id="i-mic" viewBox="0 0 16 16"><rect x="6" y="1.8" width="4" height="7" rx="2"/><path d="M3.4 7.4a4.6 4.6 0 0 0 9.2 0M8 12v2.2"/></symbol>
+  <symbol id="i-full" viewBox="0 0 16 16"><path d="M2.5 5.5v-3h3M13.5 5.5v-3h-3M2.5 10.5v3h3M13.5 10.5v3h-3"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.1"/><path d="M8 1.8v1.8M8 12.4v1.8M13.4 4.9l-1.6.9M4.2 10.2l-1.6.9M13.4 11.1l-1.6-.9M4.2 5.8l-1.6-.9"/></symbol>
+  <symbol id="i-pen" viewBox="0 0 16 16"><path d="M2.5 13.5l.8-3.1 7.5-7.5 2.3 2.3-7.5 7.5zM9.9 3.8l2.3 2.3"/></symbol>
+  <symbol id="i-draw" viewBox="0 0 16 16"><path d="M2.2 12.8c2.4.8 3.4-.6 3-2-.5-1.5 1-2.6 2.4-1.8 1.7 1 4.5-1.5 5.6-5.4"/><circle cx="13.4" cy="3.4" r="1.1"/></symbol>
+  <symbol id="i-align" viewBox="0 0 16 16"><path d="M2 4h12M2 8h8M2 12h10"/></symbol>
+  <symbol id="i-hl" viewBox="0 0 16 16"><path d="M3 12.5h10M5 10l5.6-5.7 1.8 1.8L6.8 11.8H5z"/></symbol>
+  <symbol id="i-note" viewBox="0 0 16 16"><path d="M2.5 3.5c0-.6.4-1 1-1h9c.6 0 1 .4 1 1v6l-3 3h-7c-.6 0-1-.4-1-1zM10.5 12.5v-3h3"/></symbol>
+  <symbol id="i-eraser" viewBox="0 0 16 16"><path d="M5.5 13h8M3 10.4l6-6a1 1 0 0 1 1.4 0l2.2 2.2a1 1 0 0 1 0 1.4L8.4 12.2H5z"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 16 16"><path d="M3 4.5h10M6.3 2.5h3.4M4.2 4.5l.7 8.3c0 .5.5.9 1 .9h4.2c.5 0 1-.4 1-.9l.7-8.3"/></symbol>
+  <symbol id="i-save" viewBox="0 0 16 16"><path d="M2.5 3.5c0-.6.4-1 1-1h7.6l2.4 2.4v7.6c0 .6-.4 1-1 1h-9c-.6 0-1-.4-1-1zM5 2.8V6h5.4V2.8M5 13.2V9.6h6v3.6"/></symbol>
+  <symbol id="i-comment" viewBox="0 0 16 16"><path d="M2.5 3.8c0-.6.4-1 1-1h9c.6 0 1 .4 1 1v6c0 .6-.4 1-1 1H7l-3 2.6v-2.6H3.5c-.6 0-1-.4-1-1z"/></symbol>
+  <symbol id="i-broom" viewBox="0 0 16 16"><path d="M9.6 2.2L7.5 8.5M4.2 13.6c.3-2.6 1.5-4.4 3.3-5.1 1.8.7 3 2.5 3.3 5.1z"/></symbol>
+  <symbol id="i-clearfmt" viewBox="0 0 16 16"><path d="M4 3h8M8.9 3l-2.2 8M4.6 11h4M11 10l3 3M14 10l-3 3"/></symbol>
+  <symbol id="i-wave" viewBox="0 0 16 16"><path d="M2 8h1.5M5 5v6M8 2.8v10.4M11 5v6M12.8 8h1.4"/></symbol>
+  <symbol id="i-book" viewBox="0 0 16 16"><path d="M8 3.4C6.8 2.5 4.8 2.2 2.5 2.5v10c2.3-.3 4.3 0 5.5.9 1.2-.9 3.2-1.2 5.5-.9v-10C11.2 2.2 9.2 2.5 8 3.4zM8 3.4v10"/></symbol>
+  <symbol id="i-globe" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M2 8h12M8 2c-3.3 3.6-3.3 8.4 0 12 3.3-3.6 3.3-8.4 0-12z"/></symbol>
+  <symbol id="i-check" viewBox="0 0 16 16"><path d="M3 8.5l3.2 3.2L13 5"/></symbol>
+  <symbol id="i-cursor" viewBox="0 0 16 16"><path d="M4 2.5l8.5 5.7-3.8.9-1.6 3.6z"/></symbol>
+  <symbol id="i-rec" viewBox="0 0 16 16"><circle cx="8" cy="8" r="3.6"/></symbol>
+  <symbol id="i-more" viewBox="0 0 16 16"><circle cx="3.4" cy="8" r=".9" fill="currentColor" stroke="none"/><circle cx="8" cy="8" r=".9" fill="currentColor" stroke="none"/><circle cx="12.6" cy="8" r=".9" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-podium" viewBox="0 0 16 16"><path d="M4.5 6.5h7l1 7h-9zM6.5 6.5v-2a1.5 1.5 0 0 1 3 0v2M3 6.5h10"/></symbol>
+</svg>
+
+<div class="doc-head"><div class="wrap">
+  <div class="doc-meta"><span>SMART TELEPROMPTER</span><span><b>UI SPEC</b> — 工具列改版提案</span><span>REV. 2</span><span>2026-08-29</span></div>
+  <h1>模組化工具列：三案設計規格</h1>
+  <p class="doc-sub">現況兩列 34 個控制項恆常攤開。三案共同原則：<b>常駐列只保留演講當下必要的操作，其餘依「模組」收納，模組啟用時對應工具才出現</b>。所有收起的功能於選單列保留（30 個選單項中 24 個與工具列共用同一指令，收納零功能損失）。圖示全面改為線性向量圖（去 emoji）、單一品牌色、Windows 視窗規格。</p>
+</div></div>
+
+<div class="wrap">
+
+<!-- ════════ 方案一 ════════ -->
+<section id="p1">
+  <div class="sec-head"><span class="sec-no">PLAN 01</span><h2>常駐極簡列＋模組工具列</h2><span class="rec">建議方案</span></div>
+  <p class="sec-desc">常駐列固定 <b>9 項</b>；右段四個<b>模組開關（switch）</b>。開啟任一模組，其工具列自下方展開，左緣以 3px 品牌色線與模組名標示；關閉即收合。開了什麼、一眼可辨，且與現行程式的第二列容器、顯隱機制直接對應——<b>實作成本三案最低</b>。</p>
+
+  <div class="state-label">狀態 A — 預設（演講中，無模組啟用）</div>
+  <div class="win">
+    <div class="w-title"><span class="app-ic"></span>Smart Teleprompter — multi.txt<span class="w-caps"><span>─</span><span>☐</span><span>✕</span></span></div>
+    <div class="w-menu"><span>檔案</span><span>編輯</span><span>檢視</span><span>工具</span><span>標註</span></div>
+    <div class="bar">
+      <span class="btn primary"><svg><use href="#i-play"/></svg>開始<span class="kbd" style="border-color:rgba(255,255,255,.4);color:rgba(255,255,255,.75)">Space</span></span>
+      <span class="vsep"></span>
+      <span class="btn"><svg><use href="#i-folder"/></svg>講稿</span>
+      <span class="btn"><svg><use href="#i-slides"/></svg>投影片</span>
+      <span class="vsep"></span>
+      <span class="btn"><svg><use href="#i-locate"/></svg>回念稿</span>
+      <span class="field"><svg><use href="#i-clock"/></svg>15<span class="unit">分</span></span>
+      <span class="grow"></span>
+      <span class="sw"><span class="tr"></span>編輯</span>
+      <span class="sw"><span class="tr"></span>標註</span>
+      <span class="sw"><span class="tr"></span>Q&amp;A</span>
+      <span class="sw"><span class="tr"></span>跟讀</span>
+      <span class="vsep"></span>
+      <span class="btn ic-only quiet"><svg><use href="#i-full"/></svg></span>
+      <span class="btn ic-only quiet"><svg><use href="#i-gear"/></svg></span>
+    </div>
+    <div class="cv">
+      <div class="script"><span class="lit">大家好，我是報告人，今天分享</span>假訊息偵測的研究成果。<br><span class="dim">方法分兩階段：建圖與推論⋯</span></div>
+      <div class="slide"><i></i><i></i><i></i><i></i><em>SLIDE 1 / 33</em></div>
+    </div>
+  </div>
+
+  <div class="state-label">狀態 B — 啟用「編輯」＋「跟讀」：各自的工具列展開</div>
+  <div class="win">
+    <div class="w-title"><span class="app-ic"></span>Smart Teleprompter — multi.txt<span class="w-caps"><span>─</span><span>☐</span><span>✕</span></span></div>
+    <div class="w-menu"><span>檔案</span><span>編輯</span><span>檢視</span><span>工具</span><span>標註</span></div>
+    <div class="bar">
+      <span class="btn primary"><svg><use href="#i-play"/></svg>開始</span>
+      <span class="vsep"></span>
+      <span class="btn"><svg><use href="#i-folder"/></svg>講稿</span>
+      <span class="btn"><svg><use href="#i-slides"/></svg>投影片</span>
+      <span class="vsep"></span>
+      <span class="btn"><svg><use href="#i-locate"/></svg>回念稿</span>
+      <span class="field"><svg><use href="#i-clock"/></svg>15<span class="unit">分</span></span>
+      <span class="grow"></span>
+      <span class="sw on"><span class="tr"></span>編輯</span>
+      <span class="sw"><span class="tr"></span>標註</span>
+      <span class="sw"><span class="tr"></span>Q&amp;A</span>
+      <span class="sw on"><span class="tr"></span>跟讀</span>
+      <span class="vsep"></span>
+      <span class="btn ic-only quiet"><svg><use href="#i-full"/></svg></span>
+      <span class="btn ic-only quiet"><svg><use href="#i-gear"/></svg></span>
+    </div>
+    <div class="mod">
+      <span class="tag">編輯<small>EDIT</small></span>
+      <span class="btn" style="font-weight:700">B</span><span class="btn" style="font-style:italic">I</span><span class="btn" style="text-decoration:underline">U</span>
+      <span class="btn"><svg><use href="#i-hl"/></svg>螢光筆</span>
+      <span class="vsep"></span>
+      <span class="btn"><svg><use href="#i-clearfmt"/></svg>清格式</span>
+      <span class="btn"><svg><use href="#i-comment"/></svg>註解</span>
+      <span class="btn"><svg><use href="#i-broom"/></svg>清空白</span>
+      <span class="vsep"></span>
+      <span class="field">36<span class="unit">pt</span></span>
+      <span class="grow"></span>
+      <span class="btn"><svg><use href="#i-save"/></svg>儲存<span class="kbd">Ctrl+S</span></span>
+    </div>
+    <div class="mod">
+      <span class="tag">跟讀<small>FOLLOW</small></span>
+      <span class="btn active"><svg><use href="#i-wave"/></svg>逐字高亮：開</span>
+      <span class="btn"><svg><use href="#i-align"/></svg>對齊靈敏度</span>
+      <span class="btn"><svg><use href="#i-reset"/></svg>重新對齊</span>
+    </div>
+    <div class="cv">
+      <div class="script"><span class="dim">大家好，我是報告人，</span><span class="lit">今天分享</span>假訊息偵測的研究成果。</div>
+      <div class="slide"><i></i><i></i><i></i><i></i><em>SLIDE 1 / 33</em></div>
+    </div>
+  </div>
+
+  <div class="card"><table>
+    <tr><th style="width:190px">位置</th><th>包含的功能</th></tr>
+    <tr><td>常駐列（9 項）</td><td>開始／暫停・講稿・投影片・回念稿位置・目標時長・模組開關 ×4・全螢幕・設定</td></tr>
+    <tr><td><span class="pill">編輯</span></td><td>B／I／U・螢光筆・清格式・清文字格式・註解・清理空白・字級・儲存</td></tr>
+    <tr><td><span class="pill">標註</span></td><td>游標・鉛筆・色票 ×3＋自訂色・便利貼・橡皮擦・清除全部標註</td></tr>
+    <tr><td><span class="pill">Q&amp;A</span></td><td>載入 Q&amp;A 庫・辨識語言・翻譯・答稿逐字高亮・清空提問</td></tr>
+    <tr><td><span class="pill">跟讀</span></td><td>逐字高亮開關・對齊靈敏度・重新對齊・清漏講・回頂</td></tr>
+    <tr><td>僅保留於選單</td><td>貼上文字・載入範例・重置計時（快捷鍵 R 保留）・錄影・離開</td></tr>
+  </table></div>
+  <p class="tnote">取捨：每開一個模組多一列（同開三個以上會佔三列）；演講當下通常全關，此時畫面為三案最簡。</p>
+</section>
+
+<!-- ════════ 方案二 ════════ -->
+<section id="p2">
+  <div class="sec-head"><span class="sec-no">PLAN 02</span><h2>左側模式欄（Activity Bar）</h2></div>
+  <p class="sec-desc">仿 VS Code／Adobe 的模式欄：左緣 44px 窄欄承載<b>演講／編輯／標註／Q&amp;A 四個模式</b>，一次一模式，頂部工具列整條隨模式切換。目前模式以 2px 品牌色邊線標示。<b>先選模式、工具自動對</b>，新使用者最不易迷路；直屏時工具列不再擠爆寬度。</p>
+
+  <div class="state-label">狀態 A — 演講模式（預設）</div>
+  <div class="win">
+    <div class="w-title"><span class="app-ic"></span>Smart Teleprompter — multi.txt<span class="w-caps"><span>─</span><span>☐</span><span>✕</span></span></div>
+    <div class="w-menu"><span>檔案</span><span>編輯</span><span>檢視</span><span>工具</span><span>標註</span></div>
+    <div class="railwrap">
+      <div class="rail">
+        <span class="r cur"><svg><use href="#i-podium"/></svg></span>
+        <span class="r"><svg><use href="#i-pen"/></svg></span>
+        <span class="r"><svg><use href="#i-draw"/></svg></span>
+        <span class="r"><svg><use href="#i-mic"/></svg></span>
+        <span class="sp"></span>
+        <span class="r"><svg><use href="#i-gear"/></svg></span>
+      </div>
+      <div class="railmain">
+        <div class="bar">
+          <span class="btn primary"><svg><use href="#i-play"/></svg>開始</span>
+          <span class="vsep"></span>
+          <span class="btn"><svg><use href="#i-folder"/></svg>講稿</span>
+          <span class="btn"><svg><use href="#i-slides"/></svg>投影片</span>
+          <span class="vsep"></span>
+          <span class="btn"><svg><use href="#i-locate"/></svg>回念稿</span>
+          <span class="btn quiet">回頂</span>
+          <span class="btn quiet">清漏講</span>
+          <span class="vsep"></span>
+          <span class="field"><svg><use href="#i-clock"/></svg>15<span class="unit">分</span></span>
+          <span class="btn ic-only quiet"><svg><use href="#i-reset"/></svg></span>
+          <span class="grow"></span>
+          <span class="btn quiet"><svg><use href="#i-rec"/></svg>錄影</span>
+          <span class="btn ic-only quiet"><svg><use href="#i-full"/></svg></span>
+        </div>
+        <div class="cv">
+          <div class="script"><span class="lit">大家好，我是報告人，今天分享</span>假訊息偵測的研究成果。</div>
+          <div class="slide"><i></i><i></i><i></i><i></i><em>SLIDE 1 / 33</em></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="state-label">狀態 B — 切換至編輯模式：整條工具列換成編輯工具</div>
+  <div class="win">
+    <div class="w-title"><span class="app-ic"></span>Smart Teleprompter — multi.txt<span class="w-caps"><span>─</span><span>☐</span><span>✕</span></span></div>
+    <div class="w-menu"><span>檔案</span><span>編輯</span><span>檢視</span><span>工具</span><span>標註</span></div>
+    <div class="railwrap">
+      <div class="rail">
+        <span class="r"><svg><use href="#i-podium"/></svg></span>
+        <span class="r cur"><svg><use href="#i-pen"/></svg></span>
+        <span class="r"><svg><use href="#i-draw"/></svg></span>
+        <span class="r"><svg><use href="#i-mic"/></svg></span>
+        <span class="sp"></span>
+        <span class="r"><svg><use href="#i-gear"/></svg></span>
+      </div>
+      <div class="railmain">
+        <div class="bar">
+          <span class="btn" style="font-weight:700">B</span><span class="btn" style="font-style:italic">I</span><span class="btn" style="text-decoration:underline">U</span>
+          <span class="btn"><svg><use href="#i-hl"/></svg>螢光筆</span>
+          <span class="vsep"></span>
+          <span class="btn"><svg><use href="#i-clearfmt"/></svg>清格式</span>
+          <span class="btn"><svg><use href="#i-comment"/></svg>註解</span>
+          <span class="btn"><svg><use href="#i-broom"/></svg>清空白</span>
+          <span class="vsep"></span>
+          <span class="field">36<span class="unit">pt</span></span>
+          <span class="grow"></span>
+          <span class="btn"><svg><use href="#i-save"/></svg>儲存</span>
+          <span class="btn primary"><svg><use href="#i-check"/></svg>完成編輯</span>
+        </div>
+        <div class="cv">
+          <div class="script"><span class="lit">大家好，我是報告人│</span><span class="dim">（游標在此，直接輸入）</span></div>
+          <div class="slide"><i></i><i></i><i></i><i></i><em>SLIDE 1 / 33</em></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card"><table>
+    <tr><th style="width:190px">模式</th><th>頂列工具</th></tr>
+    <tr><td>演講（預設）</td><td>開始／暫停・講稿・投影片・回念稿・回頂・清漏講・目標時長・重置計時・錄影・全螢幕</td></tr>
+    <tr><td><span class="pill">編輯</span></td><td>B／I／U・螢光筆・清格式・註解・清空白・字級・儲存・「完成編輯」返回演講模式</td></tr>
+    <tr><td><span class="pill">標註</span></td><td>游標・鉛筆・色票＋自訂色・便利貼・橡皮擦・清除全部標註</td></tr>
+    <tr><td><span class="pill">Q&amp;A</span></td><td>Q&amp;A 庫・辨識語言・翻譯・答稿逐字高亮・清空提問（右側 Q&amp;A 面板同步展開）</td></tr>
+    <tr><td>欄底・設定</td><td>永遠可及</td></tr>
+  </table></div>
+  <p class="tnote">取捨：一次只見一種模式的工具（「邊標註邊改字」需切換）；模式欄佔 44px 寬。換得每個當下畫面最單純、模式感最明確。</p>
+</section>
+
+<!-- ════════ 方案三 ════════ -->
+<section id="p3">
+  <div class="sec-head"><span class="sec-no">PLAN 03</span><h2>單列＋工具群組</h2></div>
+  <p class="sec-desc">永遠只有一條工具列。左段固定常用鈕；<b>模組啟用時，其精選工具（3–5 個）以帶標籤的群組框長入同列</b>，右端維持模組開關。高度恆為一列、視線不必上下移動；代價是同列空間有限，低頻功能一律進選單。</p>
+
+  <div class="state-label">狀態 A — 預設</div>
+  <div class="win">
+    <div class="w-title"><span class="app-ic"></span>Smart Teleprompter — multi.txt<span class="w-caps"><span>─</span><span>☐</span><span>✕</span></span></div>
+    <div class="w-menu"><span>檔案</span><span>編輯</span><span>檢視</span><span>工具</span><span>標註</span></div>
+    <div class="bar">
+      <span class="btn primary"><svg><use href="#i-play"/></svg>開始</span>
+      <span class="vsep"></span>
+      <span class="btn ic-only"><svg><use href="#i-folder"/></svg></span>
+      <span class="btn ic-only"><svg><use href="#i-slides"/></svg></span>
+      <span class="btn ic-only"><svg><use href="#i-locate"/></svg></span>
+      <span class="field"><svg><use href="#i-clock"/></svg>15<span class="unit">分</span></span>
+      <span class="grow"></span>
+      <span class="sw"><span class="tr"></span>編輯</span>
+      <span class="sw"><span class="tr"></span>標註</span>
+      <span class="sw"><span class="tr"></span>Q&amp;A</span>
+      <span class="sw"><span class="tr"></span>跟讀</span>
+      <span class="vsep"></span>
+      <span class="btn ic-only quiet"><svg><use href="#i-full"/></svg></span>
+      <span class="btn ic-only quiet"><svg><use href="#i-gear"/></svg></span>
+    </div>
+    <div class="cv">
+      <div class="script"><span class="lit">大家好，我是報告人，今天分享</span>假訊息偵測的研究成果。</div>
+      <div class="slide"><i></i><i></i><i></i><i></i><em>SLIDE 1 / 33</em></div>
+    </div>
+  </div>
+
+  <div class="state-label">狀態 B — 啟用「編輯」＋「標註」：兩個群組長入同列</div>
+  <div class="win">
+    <div class="w-title"><span class="app-ic"></span>Smart Teleprompter — multi.txt<span class="w-caps"><span>─</span><span>☐</span><span>✕</span></span></div>
+    <div class="w-menu"><span>檔案</span><span>編輯</span><span>檢視</span><span>工具</span><span>標註</span></div>
+    <div class="bar">
+      <span class="btn primary"><svg><use href="#i-play"/></svg>開始</span>
+      <span class="vsep"></span>
+      <span class="btn ic-only"><svg><use href="#i-folder"/></svg></span>
+      <span class="btn ic-only"><svg><use href="#i-slides"/></svg></span>
+      <span class="field"><svg><use href="#i-clock"/></svg>15<span class="unit">分</span></span>
+      <span class="grp"><span class="gl">編輯</span>
+        <span class="btn" style="font-weight:700">B</span><span class="btn" style="font-style:italic">I</span><span class="btn" style="text-decoration:underline">U</span>
+        <span class="btn ic-only"><svg><use href="#i-hl"/></svg></span>
+        <span class="btn ic-only"><svg><use href="#i-save"/></svg></span>
+      </span>
+      <span class="grp"><span class="gl">標註</span>
+        <span class="btn ic-only"><svg><use href="#i-draw"/></svg></span>
+        <span class="btn ic-only"><span class="swatch" style="background:#e8c34a"></span></span>
+        <span class="btn ic-only"><span class="swatch" style="background:#d05a52"></span></span>
+        <span class="btn ic-only"><svg><use href="#i-note"/></svg></span>
+        <span class="btn ic-only"><svg><use href="#i-eraser"/></svg></span>
+      </span>
+      <span class="grow"></span>
+      <span class="sw on"><span class="tr"></span>編輯</span>
+      <span class="sw on"><span class="tr"></span>標註</span>
+      <span class="btn ic-only quiet"><svg><use href="#i-more"/></svg></span>
+    </div>
+    <div class="cv">
+      <div class="script"><span class="lit">大家好│</span><span class="dim">（編輯＋標註同時作業）</span></div>
+      <div class="slide"><i></i><i></i><i></i><i></i><em>SLIDE 1 / 33</em></div>
+    </div>
+  </div>
+
+  <div class="card"><table>
+    <tr><th style="width:190px">位置</th><th>包含的功能</th></tr>
+    <tr><td>固定左段</td><td>開始・講稿・投影片・回念稿・目標時長（全螢幕／設定在右端）</td></tr>
+    <tr><td><span class="pill">編輯群組</span></td><td>B・I・U・螢光筆・儲存（清格式／註解／清空白／字級 → 選單「編輯」）</td></tr>
+    <tr><td><span class="pill">標註群組</span></td><td>鉛筆・常用色 ×2・便利貼・橡皮擦（游標／自訂色／清除全部 → 選單「標註」）</td></tr>
+    <tr><td><span class="pill">Q&amp;A 群組</span></td><td>Q&amp;A 庫・語言・翻譯（其餘於 Q&amp;A 面板內）</td></tr>
+    <tr><td><span class="pill">跟讀群組</span></td><td>逐字高亮・清漏講・回頂</td></tr>
+    <tr><td>僅保留於選單</td><td>回頂・清漏講（演講模式）・重置計時・錄影・貼上文字・載入範例・低頻編輯／標註項</td></tr>
+  </table></div>
+  <p class="tnote">取捨：群組只放精選項，低頻功能需進選單；多模組同開時窄視窗會換行（右端以「⋯」收納溢出）。優點是高度恆為一列。</p>
+</section>
+
+<!-- ════════ 比較 ════════ -->
+<section id="verdict">
+  <div class="sec-head"><span class="sec-no">SUMMARY</span><h2>比較與建議</h2></div>
+  <div class="card"><table>
+    <tr><th>面向</th><th>01 模組工具列</th><th>02 左側模式欄</th><th>03 單列群組</th></tr>
+    <tr><td>預設畫面精簡度</td><td>9 項</td><td>模式內 10 項</td><td>8 項＋開關</td></tr>
+    <tr><td>功能位置可預期性</td><td>高——開什麼出什麼</td><td>高——模式即分類</td><td>中——群組使列寬變動</td></tr>
+    <tr><td>多模組同時作業</td><td>可（多列疊加）</td><td>不可（一次一模式）</td><td>可（同列共存）</td></tr>
+    <tr><td>垂直空間成本</td><td>每模組 +1 列</td><td>固定（欄寬 44px）</td><td>恆為 1 列</td></tr>
+    <tr><td>實作對映成本</td><td>最低（既有容器與顯隱機制）</td><td>中（新建模式欄）</td><td>中（自訂群組容器）</td></tr>
+  </table></div>
+  <div class="verdict">
+    <h3>建議採用方案一</h3>
+    <p>最符合「模組開啟才出現對應工具列」的產品定義；演講當下（全關）畫面最乾淨；程式端第二列容器與顯隱機制皆已存在，<b>改動半徑與風險三案最小</b>。若日後直屏使用比重升高，方案二的模式欄可作為第二階段疊加——兩案不互斥。</p>
+  </div>
+</section>
+
+</div>
+</body>
+</html>
