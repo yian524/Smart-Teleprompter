@@ -49,6 +49,12 @@ class AppConfig:
     # QA 模式使用系統聲音 loopback（Windows WASAPI）：抓 Teams/Zoom 觀眾聲音
     # True = 進 QA 時自動切 loopback；退出 QA 切回麥克風
     qa_use_system_audio: bool = True
+    # 上次載入的 Q&A 庫路徑；下次啟動自動還原
+    last_qa_path: str = ""
+    # 答稿卡拉 OK 逐字高亮（QA 面板的滑動開關）
+    qa_karaoke_enabled: bool = False
+    # Q&A 庫裡 B01 對應的實際投影片頁碼（1-based）；0 = 不換算備答編號
+    qa_backup_start_page: int = 0
 
 
 _MIGRATION_KEY = "_migration_streaming_v1"
