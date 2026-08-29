@@ -1318,6 +1318,14 @@ class PrompterView(QTextEdit):
         last = doc.lastBlock()
         return last
 
+    def page_count_from_blocks(self) -> int:
+        """以文件內的分頁符數量回傳頁數。
+
+        這是 `_relayout_slide_gaps` 判斷「哪幾頁有真正 block」時用的同一個口徑；
+        補頁邏輯必須跟它一致，否則會補不到（或重複補）。
+        """
+        return len(self._hr_blocks) + 1 if self.document().blockCount() > 0 else 0
+
     def _relayout_slide_gaps(self) -> None:
         """以 slide 數為主建立每頁邊界（top_y, bottom_y）。
         - 有講稿頁的：取 max(文字自然高度, slide 高度)

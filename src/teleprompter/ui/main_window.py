@@ -1401,6 +1401,9 @@ class MainWindow(QMainWindow):
         if self.transcript is None or not self.transcript.full_text.strip():
             if not self._offer_extracted_notes(p, deck):
                 self._create_default_transcript_from_slides(deck.page_count)
+        # 注意：這裡刻意「不」自動補齊講稿頁數。既有契約是「載入投影片不得改動
+        # 使用者現有講稿」（tests/test_view_modes.py 有兩個測試在守）。頁數對齊改在
+        # 進入編輯模式時做（_toggle_edit_mode → _expand_transcript_for_slides）。
         # 嵌入到 PrompterView（左文右圖）
         self.view.set_slide_deck(deck)
         self._sync_slide_to_current_sentence()
@@ -2973,15 +2976,18 @@ class MainWindow(QMainWindow):
         """
         if self.transcript is None or self.slide_deck is None:
             return 0
-        transcript_pages = max(1, len(self.transcript.pages))
+        # 用 view 的分頁符數量當口徑：`_relayout_slide_gaps` 就是照這個決定
+        # 哪幾頁有真正的 QTextBlock；用 len(transcript.pages) 會與它錯開，
+        # 導致這裡誤判「頁數夠了」而不補，畫面上卻留下點不進去的虛擬頁。
+        transcript_pages = max(1, self.view.page_count_from_blocks())
         total_slides = self.slide_deck.page_count
         if total_slides <= transcript_pages:
             return 0
         current_text = self.view.toPlainText().rstrip()
         extra_parts: list[str] = []
-        placeholder = "（請在此輸入此頁講稿）"
+        # 只放標題，不放「（請在此輸入…）」：那串字會被語音對齊當成待念的講稿
         for i in range(transcript_pages + 1, total_slides + 1):
-            extra_parts.append(f"\n\n---\n\n# Slide {i}\n\n{placeholder}\n")
+            extra_parts.append(chr(10)*2 + "---" + chr(10)*2 + f"# Slide {i}" + chr(10))
         new_text = current_text + "".join(extra_parts)
         # 直接 setPlainText（view 在進入 edit 前會清 formats，是預期行為）
         self.view.set_text(new_text)
