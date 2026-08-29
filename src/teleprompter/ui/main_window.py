@@ -618,9 +618,12 @@ class MainWindow(QMainWindow):
         self.act_start.triggered.connect(self._toggle_run)
         tb.addAction(self.act_start)
 
-        self.act_goto_speech = QAction("回念稿", self)
+        self.act_goto_speech = QAction("回目前位置", self)
         self.act_goto_speech.setIcon(icon("locate"))
-        self.act_goto_speech.setToolTip("把視窗捲回目前辨識的位置（Ctrl+Home）")
+        self.act_goto_speech.setToolTip(
+            "捲回你現在念到的那一句（卡拉OK 高亮處）。\n"
+            "手動翻看別頁之後，用這個一鍵回到念稿位置（Ctrl+Home）"
+        )
         self.act_goto_speech.setShortcut("Ctrl+Home")
         self.act_goto_speech.triggered.connect(self._goto_speech_position)
         tb.addAction(self.act_goto_speech)
