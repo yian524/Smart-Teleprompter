@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QProgressDialog,
     QSpinBox,
+    QSizePolicy,
     QSplitter,
     QStackedWidget,
     QStatusBar,
@@ -54,6 +55,8 @@ from ..core.session import Session, SessionManager, default_sessions_path
 from .page_divider_overlay import PageDividerOverlay
 from .prompter_view import PrompterView
 from .qa_panel import QAPanel
+from .icons import icon
+from .module_switch import ModuleToggle
 from .notes_import_dialog import NotesImportDialog
 from .record_source_dialog import RecordSourceDialog
 from .session_tab_bar import SessionTabBar
@@ -182,7 +185,7 @@ class TimePanel(QFrame):
         layout.setContentsMargins(16, 4, 16, 4)
         layout.setSpacing(16)
 
-        self.elapsed_label = QLabel("⏱ 00:00 / --:--")
+        self.elapsed_label = QLabel("00:00 / --:--")
         self.elapsed_label.setStyleSheet("font-size: 15px; font-weight: 600;")
         layout.addWidget(self.elapsed_label)
 
@@ -212,15 +215,15 @@ class TimePanel(QFrame):
             self.slide_label.hide()
             return
         if title:
-            self.slide_label.setText(f"📄 Slide {current}/{total} · {title}")
+            self.slide_label.setText(f"Slide {current}/{total} · {title}")
         else:
-            self.slide_label.setText(f"📄 Slide {current}/{total}")
+            self.slide_label.setText(f"Slide {current}/{total}")
         self.slide_label.show()
 
     def update_state(self, state) -> None:
         elapsed = format_mmss(state.elapsed_ms)
         target = format_mmss(state.target_ms) if state.target_ms > 0 else "--:--"
-        self.elapsed_label.setText(f"⏱ {elapsed} / {target}")
+        self.elapsed_label.setText(f"{elapsed} / {target}")
 
         if state.target_ms == 0:
             self.remaining_label.setText("無目標時間")
@@ -401,7 +404,7 @@ class MainWindow(QMainWindow):
         sb.addWidget(self.status_recognized, 1)
 
         # 引擎狀態：句子位置 + 信心 + 原因（生產級可見性）
-        self.status_engine = QLabel("📍 — / —  🎯 —")
+        self.status_engine = QLabel("位置 — / —   信心 —")
         self.status_engine.setStyleSheet("padding: 0 8px; color: #B0B0B0;")
         sb.addPermanentWidget(self.status_engine)
 
@@ -430,18 +433,21 @@ class MainWindow(QMainWindow):
         self._view_mode_group = QButtonGroup(self)
         self._view_mode_group.setExclusive(True)
         self.btn_mode_transcript = QToolButton()
-        self.btn_mode_transcript.setText("📄")
+        self.btn_mode_transcript.setText("")
+        self.btn_mode_transcript.setIcon(icon("doc"))
         self.btn_mode_transcript.setToolTip("講稿模式：文字滿版 (Ctrl+1)")
         self.btn_mode_transcript.setCheckable(True)
         self.btn_mode_transcript.clicked.connect(lambda: self._set_view_mode("transcript"))
         self.btn_mode_split = QToolButton()
-        self.btn_mode_split.setText("⊞")
+        self.btn_mode_split.setText("")
+        self.btn_mode_split.setIcon(icon("split"))
         self.btn_mode_split.setToolTip("分割模式：文左圖右 (Ctrl+2)")
         self.btn_mode_split.setCheckable(True)
         self.btn_mode_split.setChecked(True)   # 預設
         self.btn_mode_split.clicked.connect(lambda: self._set_view_mode("split"))
         self.btn_mode_slide = QToolButton()
-        self.btn_mode_slide.setText("🖼")
+        self.btn_mode_slide.setText("")
+        self.btn_mode_slide.setIcon(icon("slides"))
         self.btn_mode_slide.setToolTip("投影片模式：加左側縮圖列，左右鍵逐頁切換 (Ctrl+3)")
         self.btn_mode_slide.setCheckable(True)
         self.btn_mode_slide.clicked.connect(lambda: self._set_view_mode("slide"))
@@ -456,7 +462,8 @@ class MainWindow(QMainWindow):
 
         # 版面對調按鈕（⇆ / ⇅）：一鍵把文字/投影片左右或上下互換
         self.btn_swap_layout = QToolButton()
-        self.btn_swap_layout.setText("⇆")
+        self.btn_swap_layout.setText("")
+        self.btn_swap_layout.setIcon(icon("swap"))
         self.btn_swap_layout.setToolTip("對調文字與投影片位置 (橫屏左右互換、直屏上下互換)")
         self.btn_swap_layout.setStyleSheet(
             "QToolButton { font-size: 14px; padding: 2px 8px; border: none; color: #CCCCCC; }"
@@ -567,24 +574,30 @@ class MainWindow(QMainWindow):
         tb.setMovable(False)
         # 溢出按鈕（>>）的 hint：確保直屏 / 窄視窗時使用者看得到「還有更多按鈕」
         tb.setContextMenuPolicy(Qt.ContextMenuPolicy.PreventContextMenu)
+        # 有了圖示之後要明說「圖示＋文字」，否則 Qt 預設 IconOnly 會把標籤吃掉
+        tb.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self._main_toolbar = tb
         self.addToolBar(tb)
 
-        self.act_open = QAction("📂 開啟講稿", self)
+        self.act_open = QAction("講稿", self)
+        self.act_open.setIcon(icon("folder"))
         self.act_open.setShortcut(QKeySequence.StandardKey.Open)
         self.act_open.triggered.connect(self._open_file)
         tb.addAction(self.act_open)
 
         # 儲存、貼上文字 → 只在選單列「檔案」中，不放工具列
-        self.act_save = QAction("💾 儲存", self)
+        self.act_save = QAction("儲存", self)
+        self.act_save.setIcon(icon("save"))
         self.act_save.setToolTip("把目前講稿寫回檔案 (Ctrl+S)")
         self.act_save.setShortcut("Ctrl+S")
         self.act_save.triggered.connect(self._save_current_transcript)
 
-        self.act_paste = QAction("📋 貼上文字", self)
+        self.act_paste = QAction("貼上文字", self)
+        self.act_paste.setIcon(icon("text"))
         self.act_paste.triggered.connect(self._paste_text)
 
-        self.act_open_slides = QAction("🖼 載入投影片", self)
+        self.act_open_slides = QAction("投影片", self)
+        self.act_open_slides.setIcon(icon("slides"))
         self.act_open_slides.setToolTip("載入 PDF 或 PPTX 作為右側視覺參考")
         self.act_open_slides.triggered.connect(self._open_slides)
         tb.addAction(self.act_open_slides)
@@ -592,28 +605,30 @@ class MainWindow(QMainWindow):
         tb.addSeparator()
 
         # === 播放區（演講進行中最常用，放在檔案區右側）===
-        self.act_start = QAction("▶ 開始", self)
+        self.act_start = QAction("開始", self)
+        self.act_start.setIcon(icon("play"))
         self.act_start.setShortcut(Qt.Key.Key_Space)
         self.act_start.setToolTip("開始 / 暫停語音辨識（Space）")
         self.act_start.triggered.connect(self._toggle_run)
         tb.addAction(self.act_start)
 
-        self.act_goto_speech = QAction("📍 回念稿位置", self)
+        self.act_goto_speech = QAction("回念稿", self)
+        self.act_goto_speech.setIcon(icon("locate"))
         self.act_goto_speech.setToolTip("把視窗捲回目前辨識的位置（Ctrl+Home）")
         self.act_goto_speech.setShortcut("Ctrl+Home")
         self.act_goto_speech.triggered.connect(self._goto_speech_position)
         tb.addAction(self.act_goto_speech)
 
-        self.act_reset_pos = QAction("⤴ 回頂", self)
+        self.act_reset_pos = QAction("回頂", self)
+        self.act_reset_pos.setIcon(icon("top"))
         self.act_reset_pos.setToolTip("講稿跳回第一句")
         self.act_reset_pos.triggered.connect(self._reset_position)
-        tb.addAction(self.act_reset_pos)
 
-        self.act_clear_skipped = QAction("✖ 清漏講", self)
+        self.act_clear_skipped = QAction("清漏講", self)
+        self.act_clear_skipped.setIcon(icon("skip"))
         self.act_clear_skipped.setToolTip("清除漏講標記（Ctrl+Shift+K）")
         self.act_clear_skipped.setShortcut("Ctrl+Shift+K")
         self.act_clear_skipped.triggered.connect(self._clear_skipped)
-        tb.addAction(self.act_clear_skipped)
 
         tb.addSeparator()
 
@@ -626,7 +641,6 @@ class MainWindow(QMainWindow):
                 self.sb_font_size.setValue(self.view.font_size()),
             )
         )
-        tb.addAction(self.act_font_smaller)
 
         self.sb_font_size = QSpinBox()
         self.sb_font_size.setRange(12, 120)
@@ -635,7 +649,6 @@ class MainWindow(QMainWindow):
         self.sb_font_size.setToolTip("字型大小")
         self.sb_font_size.setFixedWidth(80)
         self.sb_font_size.valueChanged.connect(self._on_font_size_spinbox)
-        tb.addWidget(self.sb_font_size)
 
         self.act_font_bigger = QAction("A+", self)
         self.act_font_bigger.setToolTip("字型放大 (Ctrl++)")
@@ -645,12 +658,11 @@ class MainWindow(QMainWindow):
                 self.sb_font_size.setValue(self.view.font_size()),
             )
         )
-        tb.addAction(self.act_font_bigger)
 
         tb.addSeparator()
 
         # === 計時區 ===
-        self.cb_target = QCheckBox("⏲ 目標時長")
+        self.cb_target = QCheckBox("目標時長")
         self.cb_target.setChecked(self.cfg.target_duration_sec > 0)
         self.cb_target.toggled.connect(self._on_target_toggled)
         tb.addWidget(self.cb_target)
@@ -664,45 +676,81 @@ class MainWindow(QMainWindow):
         self._sb_target_min_action = tb.addWidget(self.sb_target_min)
         self._sb_target_min_action.setVisible(self.cb_target.isChecked())
 
-        self.act_reset_timer = QAction("🔄 重置計時", self)
+        self.act_reset_timer = QAction("重置計時", self)
+        self.act_reset_timer.setIcon(icon("reset"))
         self.act_reset_timer.setToolTip("計時歸零（R）")
         self.act_reset_timer.setShortcut("R")
         self.act_reset_timer.triggered.connect(self.timer_ctrl.reset)
-        tb.addAction(self.act_reset_timer)
 
         tb.addSeparator()
 
         # === 模式區 ===
         # 編輯模式 toggle 移到 annotation_toolbar（跟文字工具放一起）
-        self.act_edit_mode = QAction("✏ 編輯模式", self)
+        self.act_edit_mode = QAction("編輯模式", self)
+        self.act_edit_mode.setIcon(icon("pen"))
         self.act_edit_mode.setShortcut("Ctrl+E")
         self.act_edit_mode.setCheckable(True)
         self.act_edit_mode.toggled.connect(self._toggle_edit_mode)
         # 注意：稍後在 annotation_toolbar 中 addAction，不放主工具列
 
-        self.act_qa_mode = QAction("🎤 Q&A 模式", self)
+        self.act_qa_mode = QAction("Q&A 模式", self)
+        self.act_qa_mode.setIcon(icon("mic"))
         self.act_qa_mode.setShortcut("Ctrl+Q")
         self.act_qa_mode.setCheckable(True)
         self.act_qa_mode.triggered.connect(self._toggle_qa_mode)
-        tb.addAction(self.act_qa_mode)
 
-        self.act_record = QAction("⏺ 錄影", self)
+        self.act_record = QAction("錄影", self)
+        self.act_record.setIcon(icon("record"))
         self.act_record.setToolTip("開始 / 停止螢幕錄影 + 麥克風 → MP4")
         self.act_record.setCheckable(True)
         self.act_record.triggered.connect(self._toggle_recording)
-        tb.addAction(self.act_record)
+
+        # === 模組開關（右段）：開啟才展開對應的模組工具列 ===
+        # 用 spacer 把開關推到右邊，讓左段常駐鈕與右段模組區在視覺上分開
+        _spacer = QWidget()
+        _spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        tb.addWidget(_spacer)
+
+        self.module_toggles: dict[str, ModuleToggle] = {}
+        for key, label in (("edit", "編輯"), ("annot", "標註"),
+                           ("qa", "Q&A"), ("follow", "跟讀")):
+            tg = ModuleToggle(label)
+            tg.toggled.connect(lambda on, k=key: self._on_module_toggled(k, on))
+            tb.addWidget(tg)
+            self.module_toggles[key] = tg
 
         tb.addSeparator()
 
         # === 系統區（最少用，放最右）===
-        self.act_fullscreen = QAction("⛶ 全螢幕", self)
+        self.act_fullscreen = QAction("全螢幕", self)
+        self.act_fullscreen.setIcon(icon("fullscreen"))
         self.act_fullscreen.setShortcut("F11")
         self.act_fullscreen.triggered.connect(self._toggle_fullscreen)
         tb.addAction(self.act_fullscreen)
 
-        self.act_settings = QAction("⚙ 設定", self)
+        self.act_settings = QAction("設定", self)
+        self.act_settings.setIcon(icon("gear"))
         self.act_settings.triggered.connect(self._open_settings)
         tb.addAction(self.act_settings)
+
+        # === 模組工具列 ×4：預設全隱藏，由模組開關控制展開 ===
+        # 每條左緣一個標籤（模組名 + 英文小字），與 design/toolbar_mockup_v2.html 對齊
+        self.module_bars: dict[str, QToolBar] = {}
+        for key, zh, en in (("edit", "編輯", "EDIT"), ("annot", "標註", "ANNOTATE"),
+                            ("qa", "Q&A", "Q&A"), ("follow", "跟讀", "FOLLOW")):
+            bar = QToolBar(f"{zh}模組", self)
+            bar.setObjectName(f"moduleBar_{key}")
+            bar.setMovable(False)
+            bar.setContextMenuPolicy(Qt.ContextMenuPolicy.PreventContextMenu)
+            bar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+            self.addToolBarBreak()
+            self.addToolBar(bar)
+            tag = QLabel(f"  {zh}  <span style='color:#5d636b;font-size:10px'>{en}</span>  ")
+            tag.setObjectName("moduleTag")
+            bar.addWidget(tag)
+            bar.setVisible(False)
+            self.module_bars[key] = bar
+
 
         # === 主工具列延伸（row 2）：直屏時顯示，把 secondary 群組移到這裡 ===
         self._main_toolbar_row2 = QToolBar("主工具列延伸", self)
@@ -734,7 +782,8 @@ class MainWindow(QMainWindow):
         self.addToolBar(self.annotation_toolbar)
 
         # ↖ 游標
-        self.act_tool_pointer = QAction("↖ 游標", self)
+        self.act_tool_pointer = QAction("游標", self)
+        self.act_tool_pointer.setIcon(icon("cursor"))
         self.act_tool_pointer.setToolTip("一般游標（編輯/選取/跳位）(V)")
         self.act_tool_pointer.setCheckable(True)
         self.act_tool_pointer.setChecked(True)
@@ -744,7 +793,8 @@ class MainWindow(QMainWindow):
         self.annotation_toolbar.addSeparator()
 
         # 🖊 鉛筆 + 🎨 顏色（放在鉛筆正旁邊）
-        self.act_tool_pencil = QAction("🖊 鉛筆", self)
+        self.act_tool_pencil = QAction("鉛筆", self)
+        self.act_tool_pencil.setIcon(icon("draw"))
         self.act_tool_pencil.setToolTip(
             "【標註層】自由手繪畫在畫面上（不動講稿文字本身）(P)"
         )
@@ -769,17 +819,19 @@ class MainWindow(QMainWindow):
             btn.setCheckable(True)
             btn.clicked.connect(lambda _c=False, col=color: self._set_annotation_color(col))
             self._color_preset_btns.append(btn)
-            self.annotation_toolbar.addWidget(btn)
+            # 不掛進舊的 annotation_toolbar：widget 只能屬於一條工具列，
+            # 由「標註」模組列在 _build_toolbar 末端統一 addWidget
         self._color_preset_btns[0].setChecked(True)
 
         self.btn_color_custom = QToolButton()
-        self.btn_color_custom.setText("🎨")
+        self.btn_color_custom.setText("")
+        self.btn_color_custom.setIcon(icon("palette"))
         self.btn_color_custom.setToolTip("自訂顏色（套用到鉛筆 + 螢光筆 + 便利貼）")
         self.btn_color_custom.clicked.connect(self._pick_custom_color)
-        self.annotation_toolbar.addWidget(self.btn_color_custom)
 
         # 🖍 螢光筆（從 edit_toolbar 搬過來，共用顏色）
-        self.act_highlight = QAction("🖍 螢光筆", self)
+        self.act_highlight = QAction("螢光筆", self)
+        self.act_highlight.setIcon(icon("highlight"))
         self.act_highlight.setToolTip(
             "把選取的講稿文字加上背景色（顏色跟鉛筆共用）(Ctrl+H)"
         )
@@ -790,7 +842,8 @@ class MainWindow(QMainWindow):
         self.annotation_toolbar.addSeparator()
 
         # 🗒 便利貼
-        self.act_tool_note = QAction("🗒 便利貼", self)
+        self.act_tool_note = QAction("便利貼", self)
+        self.act_tool_note.setIcon(icon("note"))
         self.act_tool_note.setToolTip("插入便利貼筆記 (N)")
         self.act_tool_note.setCheckable(True)
         self.act_tool_note.triggered.connect(lambda: self._set_annotation_tool("note"))
@@ -799,7 +852,8 @@ class MainWindow(QMainWindow):
         self.annotation_toolbar.addSeparator()
 
         # 🧽 橡皮擦 + 🧹 清除本頁
-        self.act_tool_eraser = QAction("🧽 橡皮擦", self)
+        self.act_tool_eraser = QAction("橡皮擦", self)
+        self.act_tool_eraser.setIcon(icon("eraser"))
         self.act_tool_eraser.setToolTip(
             "【標註層】塗抹式刪除筆劃與便利貼 (E)"
         )
@@ -807,7 +861,8 @@ class MainWindow(QMainWindow):
         self.act_tool_eraser.triggered.connect(lambda: self._set_annotation_tool("eraser"))
         self.annotation_toolbar.addAction(self.act_tool_eraser)
 
-        self.act_clear_page = QAction("🗑 清除全部標註", self)
+        self.act_clear_page = QAction("清除標註", self)
+        self.act_clear_page.setIcon(icon("trash"))
         self.act_clear_page.setToolTip(
             "一鍵清除當前頁的所有「標註」（鉛筆筆劃 + 便利貼）；"
             "這跟「清除文字格式」不同 — 不會動到講稿文字本身。"
@@ -838,13 +893,15 @@ class MainWindow(QMainWindow):
         self.act_underline.triggered.connect(self.view.toggle_underline)
         self.annotation_toolbar.addAction(self.act_underline)
 
-        self.act_clear_fmt = QAction("✖格式", self)
+        self.act_clear_fmt = QAction("清格式", self)
+        self.act_clear_fmt.setIcon(icon("clearfmt"))
         self.act_clear_fmt.setToolTip("清除選取範圍的格式 (Ctrl+\\)")
         self.act_clear_fmt.setShortcut("Ctrl+\\")
         self.act_clear_fmt.triggered.connect(self.view.clear_format)
         self.annotation_toolbar.addAction(self.act_clear_fmt)
 
-        self.act_clear_all_fmt = QAction("❌ 清文字格式", self)
+        self.act_clear_all_fmt = QAction("清文字格式", self)
+        self.act_clear_all_fmt.setIcon(icon("clearfmt"))
         self.act_clear_all_fmt.setToolTip(
             "清除整篇文字的粗體/斜體/底線/螢光筆格式（會跳確認視窗）"
         )
@@ -854,12 +911,14 @@ class MainWindow(QMainWindow):
         self.annotation_toolbar.addSeparator()
 
         # 結構類（會改動講稿文字，按下彈確認視窗）
-        self.act_insert_annotation = QAction("💬 插入註解", self)
+        self.act_insert_annotation = QAction("註解", self)
+        self.act_insert_annotation.setIcon(icon("comment"))
         self.act_insert_annotation.setToolTip("⚠ 會改動講稿文字：在游標位置插入備忘註解")
         self.act_insert_annotation.triggered.connect(self._insert_annotation)
         self.annotation_toolbar.addAction(self.act_insert_annotation)
 
-        self.act_compact_ws = QAction("🧹 清理空白", self)
+        self.act_compact_ws = QAction("清空白", self)
+        self.act_compact_ws.setIcon(icon("broom"))
         self.act_compact_ws.setToolTip("⚠ 會改動講稿文字：移除多餘空白行與行尾空白")
         self.act_compact_ws.triggered.connect(self._compact_whitespace)
         self.annotation_toolbar.addAction(self.act_compact_ws)
@@ -892,6 +951,10 @@ class MainWindow(QMainWindow):
 
         # （原獨立的 edit_toolbar 已合併到 annotation_toolbar；保留空的 edit_toolbar
         #   作為測試與舊參考的 no-op 容器）
+        # 舊的標註工具列不再常駐：其工具已由「標註」模組列承載（同一批 QAction），
+        # 物件保留以維持既有測試與 _layout_annotation_toolbar 的相容性。
+        self.annotation_toolbar.setVisible(False)
+
         self.edit_toolbar = QToolBar("編輯工具列（已併入上方）", self)
         self.edit_toolbar.setMovable(False)
         self.edit_toolbar.hide()
@@ -909,6 +972,82 @@ class MainWindow(QMainWindow):
         # 編輯模式切換時重設結果（MD 重新 parse）
         self.view.text_edited.connect(self._on_transcript_edited)
         self.view.edit_mode_changed.connect(self._on_edit_mode_changed)
+
+        # === 模組工具列內容掛載（此時所有 QAction 都已建立）===
+        eb = self.module_bars["edit"]
+        for act in (self.act_bold, self.act_italic, self.act_underline, self.act_highlight):
+            eb.addAction(act)
+        eb.addSeparator()
+        for act in (self.act_clear_fmt, self.act_clear_all_fmt,
+                    self.act_insert_annotation, self.act_compact_ws):
+            eb.addAction(act)
+        eb.addSeparator()
+        eb.addAction(self.act_font_smaller)
+        eb.addWidget(self.sb_font_size)
+        eb.addAction(self.act_font_bigger)
+        _es = QWidget()
+        _es.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        eb.addWidget(_es)
+        eb.addAction(self.act_save)
+
+        ab = self.module_bars["annot"]
+        ab.addAction(self.act_tool_pointer)
+        ab.addAction(self.act_tool_pencil)
+        for btn in self._color_preset_btns:
+            ab.addWidget(btn)
+        ab.addWidget(self.btn_color_custom)
+        ab.addSeparator()
+        ab.addAction(self.act_tool_note)
+        ab.addAction(self.act_tool_eraser)
+        ab.addAction(self.act_clear_page)
+
+        qb = self.module_bars["qa"]
+        qb.addAction(self.act_qa_mode)
+
+        fb = self.module_bars["follow"]
+        fb.addAction(self.act_reset_pos)
+        fb.addAction(self.act_clear_skipped)
+        fb.addSeparator()
+        fb.addAction(self.act_reset_timer)
+        fb.addAction(self.act_record)
+
+    def _on_module_toggled(self, key: str, on: bool) -> None:
+        """模組開關 → 展開／收合對應的模組工具列，並連動該模組的實際功能。
+
+        工具列只是外殼；真正的行為仍由既有的 QAction 負責，這裡只做
+        「顯隱 + 與既有模式 action 同步」，避免出現兩套互相打架的狀態。
+        """
+        bar = self.module_bars.get(key)
+        if bar is not None:
+            bar.setVisible(on)
+        if key == "edit":
+            # 編輯模組 = 編輯模式；用 setChecked 觸發既有的完整流程
+            if self.act_edit_mode.isChecked() != on:
+                self.act_edit_mode.setChecked(on)
+        elif key == "annot":
+            # 收合標註模組時回到游標工具，避免畫布仍停在鉛筆/橡皮擦
+            if not on and not self.act_tool_pointer.isChecked():
+                self.act_tool_pointer.setChecked(True)
+                self._set_annotation_tool("pointer")
+        elif key == "qa":
+            # _toggle_qa_mode 沒有參數、依面板現況切換 → 只在狀態不符時呼叫一次
+            self.act_qa_mode.setChecked(on)
+            if self.qa_panel.isVisible() != on:
+                self._toggle_qa_mode()
+        elif key == "follow":
+            self.view.set_karaoke_enabled(on) if hasattr(self.view, "set_karaoke_enabled") else None
+
+    def sync_module_toggle(self, key: str, on: bool) -> None:
+        """外部（快捷鍵／選單）改變模式時，讓對應的模組開關跟上，不重複觸發。"""
+        tg = self.module_toggles.get(key)
+        if tg is None or tg.isChecked() == on:
+            return
+        tg.switch.blockSignals(True)
+        tg.setChecked(on)
+        tg.switch.blockSignals(False)
+        bar = self.module_bars.get(key)
+        if bar is not None:
+            bar.setVisible(on)
 
     def _build_menu_bar(self) -> None:
         """選單列（Menu Bar）：把不常用的 actions 放進下拉選單，與工具列共用 QAction。"""
@@ -1580,7 +1719,7 @@ class MainWindow(QMainWindow):
             return
         char = self.engine.current_global_char
         self.view.scroll_to_char(char)
-        self.status_recognized.setText(f"📍 已回到念稿位置（char {char}）")
+        self.status_recognized.setText(f"已回到念稿位置（char {char}）")
 
     def _update_slide_label_from_viewport(self, *_args) -> None:
         """依 viewport 目前滾動位置更新右上角「第 X / M 頁」。"""
@@ -1868,7 +2007,7 @@ class MainWindow(QMainWindow):
             preview = delta.strip()
             if len(preview) > 60:
                 preview = preview[:57] + "…"
-            self.status_recognized.setText(f"🎤 QA 收音：{preview}")
+            self.status_recognized.setText(f"QA 收音：{preview}")
             # Q&A 模式下不推進提詞位置（避免錯亂）
             return
         if self.transcript is None:
@@ -2021,7 +2160,7 @@ class MainWindow(QMainWindow):
         }
         nice = friendly.get(reason, reason)
         self.status_engine.setText(
-            f"📍 sent {idx + 1}/{total}  🎯 {conf:.0f}  {symbol} {nice}{stuck_indicator}"
+            f"句 {idx + 1}/{total}   信心 {conf:.0f}   {symbol} {nice}{stuck_indicator}"
         )
         # 投影片頁碼顯示由 viewport 滾動事件主導（_update_slide_label_from_viewport），
         # 此處不再直接 set_slide 以避免「engine 與滾動」互相打架。
@@ -2207,19 +2346,11 @@ class MainWindow(QMainWindow):
                 self._set_view_mode("split")
 
     # 主工具列 action 在直屏的「短文字」對照表（只留 emoji；下拉/checkbox 也一起壓縮）
-    _COMPACT_LABELS: dict[str, str] = {
-        "act_open": "📂",
-        "act_open_slides": "🖼",
-        "act_start": "▶",
-        "act_goto_speech": "📍",
-        "act_reset_pos": "⤴",
-        "act_clear_skipped": "✖",
-        "act_reset_timer": "🔄",
-        "act_qa_mode": "🎤",
-        "act_record": "⏺",
-        "act_fullscreen": "⛶",
-        "act_settings": "⚙",
-    }
+    # 直屏時只顯示圖示（不顯示文字）的常駐鈕；有圖示才收得乾淨
+    _ICON_ONLY_IN_PORTRAIT: tuple[str, ...] = (
+        "act_open", "act_open_slides", "act_goto_speech",
+        "act_fullscreen", "act_settings",
+    )
 
     def _layout_main_toolbar(self, is_portrait: bool) -> None:
         """主工具列：landscape 全部展開文字；portrait 同樣全部一行，但壓縮 emoji-only 讓擠得下，
@@ -2237,32 +2368,42 @@ class MainWindow(QMainWindow):
                 tb1.addAction(a)
         tb2.setVisible(False)
 
-        # 2) 依 orientation 切換按鈕文字長度
-        if not hasattr(self, "_orig_action_texts"):
-            self._orig_action_texts = {}
-        for attr, short in self._COMPACT_LABELS.items():
+        # 2) 依 orientation 切換按鈕呈現：直屏只留圖示（文字仍在 tooltip）
+        for attr in self._ICON_ONLY_IN_PORTRAIT:
             act = getattr(self, attr, None)
             if act is None:
                 continue
-            if attr not in self._orig_action_texts:
-                self._orig_action_texts[attr] = act.text()
-            act.setText(short if is_portrait else self._orig_action_texts[attr])
+            btn = tb1.widgetForAction(act)
+            if btn is None:
+                continue
+            btn.setToolButtonStyle(
+                Qt.ToolButtonStyle.ToolButtonIconOnly if is_portrait
+                else Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+            )
+            if not act.toolTip():
+                act.setToolTip(act.text())
 
         # 3) 壓縮 widget：checkbox / spinbox 在直屏改窄
         if hasattr(self, "cb_target"):
             if not hasattr(self, "_orig_cb_target_text"):
                 self._orig_cb_target_text = self.cb_target.text()
-            self.cb_target.setText("⏲" if is_portrait else self._orig_cb_target_text)
+            self.cb_target.setText("" if is_portrait else self._orig_cb_target_text)
         if hasattr(self, "sb_font_size"):
             self.sb_font_size.setFixedWidth(60 if is_portrait else 80)
         if hasattr(self, "sb_target_min"):
             self.sb_target_min.setFixedWidth(60 if is_portrait else 80)
 
     def _layout_annotation_toolbar(self, is_portrait: bool) -> None:
-        """標註工具列：landscape 全部在 row 1；portrait 把文字編輯類（B/I/U/格式...）搬到 row 2。
-        row 2 只在「直屏 + 編輯模式開啟（即 secondary 有可見項）」時才顯示，避免空 row 佔位。"""
+        """標註工具列的直橫屏配置（v1.5 起兩條都不再常駐顯示）。
+
+        標註工具已改由「標註」模組列承載，這兩條舊工具列只保留物件相容性，
+        因此這裡直接收起、不再參與版面計算。
+        """
         if not hasattr(self, "annotation_toolbar_row2"):
             return
+        self.annotation_toolbar.setVisible(False)
+        self.annotation_toolbar_row2.setVisible(False)
+        return
         tb1 = self.annotation_toolbar
         tb2 = self.annotation_toolbar_row2
         secondary = getattr(self, "_annotation_secondary_acts", None)

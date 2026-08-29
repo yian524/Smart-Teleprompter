@@ -446,33 +446,34 @@ def test_slide_mode_view_landscape_horizontal_layout(app):
 
 
 def test_main_toolbar_compacts_in_portrait_to_single_row(main_window):
-    """直屏時主工具列保持單行（emoji-only 文字），讓 main + annotation 共 2 列就夠。"""
-    # 橫屏：全部在 tb1（含 secondary），tb2 隱藏；按鈕顯示完整文字
+    """主工具列在橫/直屏都維持單行。
+
+    v1.5 起常駐列只留演講必要項（錄影等已移入模組工具列），直屏改以圖示鈕
+    壓縮寬度，因此這裡驗證的是「常駐項仍在、延伸列不出現」。
+    """
     main_window.resize(1920, 1080)
     main_window._apply_orientation_layout()
     tb1 = main_window._main_toolbar
     tb2 = main_window._main_toolbar_row2
     assert not tb2.isVisible()
     tb1_acts = [a for a in tb1.actions() if not a.isSeparator()]
-    assert main_window.act_record in tb1_acts
+    assert main_window.act_open in tb1_acts
+    assert main_window.act_start in tb1_acts
     assert main_window.act_settings in tb1_acts
-    assert "開啟講稿" in main_window.act_open.text()
-    assert "錄影" in main_window.act_record.text()
+    # 已移入模組工具列的項目不該再佔用常駐列
+    assert main_window.act_record not in tb1_acts
+    assert main_window.act_record in main_window.module_bars["follow"].actions()
 
-    # 直屏：tb2 仍隱藏；secondary 仍在 tb1；按鈕文字壓縮為 emoji-only
     main_window.resize(1080, 1920)
     main_window._apply_orientation_layout()
     assert not tb2.isVisible()
     tb1_acts = [a for a in tb1.actions() if not a.isSeparator()]
-    assert main_window.act_record in tb1_acts
+    assert main_window.act_open in tb1_acts
     assert main_window.act_settings in tb1_acts
-    assert main_window.act_open.text() == "📂"
-    assert main_window.act_record.text() == "⏺"
 
-    # 切回橫屏：文字應還原
     main_window.resize(1920, 1080)
     main_window._apply_orientation_layout()
-    assert "開啟講稿" in main_window.act_open.text()
+    assert main_window.act_open in [a for a in tb1.actions() if not a.isSeparator()]
 
 
 def test_main_window_adapts_mic_width_on_portrait(main_window):
