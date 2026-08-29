@@ -55,6 +55,7 @@ from ..core.session import Session, SessionManager, default_sessions_path
 from .page_divider_overlay import PageDividerOverlay
 from .prompter_view import PrompterView
 from .qa_panel import QAPanel
+from .floating_timer import FloatingTimer
 from .icons import icon
 from .module_switch import ModuleToggle
 from .notes_import_dialog import NotesImportDialog
@@ -375,6 +376,10 @@ class MainWindow(QMainWindow):
         self.qa_panel.set_backup_start_page(self.cfg.qa_backup_start_page)
         self.qa_panel.karaoke_switch.setChecked(self.cfg.qa_karaoke_enabled)
         self._restore_last_qa_library()
+        if self.cfg.qa_panel_floating:
+            self.act_qa_floating.setChecked(True)
+        if self.cfg.floating_timer_enabled:
+            self.act_floating_timer.setChecked(True)
         # 降低最小寬度：原本太寬會吃掉講稿區；280px 夠顯示問答欄 + 語言 combo
         self.qa_panel.setMinimumWidth(280)
         self.main_splitter.addWidget(self.qa_panel)
@@ -396,6 +401,7 @@ class MainWindow(QMainWindow):
         # QA 模式獨立啟動時的 pending：模型就緒後啟動音訊（loopback）
         self._qa_pending_audio_start: bool = False
         self._pages_missing_guard: bool = False
+        self.floating_timer: FloatingTimer | None = None
 
         # ---- 狀態列 ----
         sb = QStatusBar()
@@ -612,9 +618,12 @@ class MainWindow(QMainWindow):
         self.act_start.triggered.connect(self._toggle_run)
         tb.addAction(self.act_start)
 
-        self.act_goto_speech = QAction("回念稿", self)
+        self.act_goto_speech = QAction("回目前位置", self)
         self.act_goto_speech.setIcon(icon("locate"))
-        self.act_goto_speech.setToolTip("把視窗捲回目前辨識的位置（Ctrl+Home）")
+        self.act_goto_speech.setToolTip(
+            "捲回你現在念到的那一句（卡拉OK 高亮處）。\n"
+            "手動翻看別頁之後，用這個一鍵回到念稿位置（Ctrl+Home）"
+        )
         self.act_goto_speech.setShortcut("Ctrl+Home")
         self.act_goto_speech.triggered.connect(self._goto_speech_position)
         tb.addAction(self.act_goto_speech)
@@ -991,15 +1000,18 @@ class MainWindow(QMainWindow):
         eb.addAction(self.act_save)
 
         ab = self.module_bars["annot"]
+        # 順序＝實際作業流程：選取 → 畫（筆＋顏色）→ 擦掉 → 貼便利貼
+        # 橡皮擦與清除緊接顏色之後，跟「畫」是同一組動作，不必跨過便利貼去找
         ab.addAction(self.act_tool_pointer)
+        ab.addSeparator()
         ab.addAction(self.act_tool_pencil)
         for btn in self._color_preset_btns:
             ab.addWidget(btn)
         ab.addWidget(self.btn_color_custom)
-        ab.addSeparator()
-        ab.addAction(self.act_tool_note)
         ab.addAction(self.act_tool_eraser)
         ab.addAction(self.act_clear_page)
+        ab.addSeparator()
+        ab.addAction(self.act_tool_note)
 
         qb = self.module_bars["qa"]
         qb.addAction(self.act_qa_mode)
@@ -1048,6 +1060,80 @@ class MainWindow(QMainWindow):
         bar = self.module_bars.get(key)
         if bar is not None:
             bar.setVisible(on)
+
+    def _toggle_qa_floating(self, on: bool) -> None:
+        """Q&A 面板：獨立視窗 ↔ 收回主視窗右側。
+
+        獨立視窗時可以擺到第二螢幕或疊在簡報軟體旁邊，講稿區就不必再讓出寬度。
+        """
+        panel = self.qa_panel
+        was_visible = panel.isVisible()
+        if on:
+            self.main_splitter.setSizes(self.main_splitter.sizes())  # 記住目前比例
+            panel.setParent(None)
+            panel.setWindowFlags(
+                Qt.WindowType.Window | Qt.WindowType.WindowStaysOnTopHint
+            )
+            panel.setWindowTitle("Q&A 助手")
+            geo = self.cfg.qa_panel_geometry
+            if geo:
+                try:
+                    x, y, w, h = (int(v) for v in geo.split(","))
+                    panel.setGeometry(x, y, w, h)
+                except ValueError:
+                    panel.resize(460, 720)
+            else:
+                panel.resize(460, 720)
+            if was_visible:
+                panel.show()
+        else:
+            if panel.isVisible():
+                g = panel.geometry()
+                self.cfg = dataclass_replace(
+                    self.cfg,
+                    qa_panel_geometry=f"{g.x()},{g.y()},{g.width()},{g.height()}",
+                )
+            panel.setWindowFlags(Qt.WindowType.Widget)
+            self.main_splitter.addWidget(panel)
+            panel.setVisible(was_visible)
+        self.cfg = dataclass_replace(self.cfg, qa_panel_floating=bool(on))
+        save_config(self.cfg)
+
+    def _toggle_floating_timer(self, on: bool) -> None:
+        """開關懸浮計時視窗（切到投影片或瀏覽器時仍看得到剩餘時間）。"""
+        if on:
+            if getattr(self, "floating_timer", None) is None:
+                self.floating_timer = FloatingTimer()
+                self.timer_ctrl.state_changed.connect(self.floating_timer.update_state)
+                self.floating_timer.moved.connect(self._on_floating_timer_moved)
+                self.floating_timer.closed.connect(
+                    lambda: self.act_floating_timer.setChecked(False)
+                )
+            self._place_floating_timer()
+            self.floating_timer.show()
+        elif getattr(self, "floating_timer", None) is not None:
+            self.floating_timer.hide()
+        self.cfg = dataclass_replace(self.cfg, floating_timer_enabled=bool(on))
+        save_config(self.cfg)
+
+    def _place_floating_timer(self) -> None:
+        """還原上次位置；沒有記錄就放到主螢幕右上角。"""
+        ft = getattr(self, "floating_timer", None)
+        if ft is None:
+            return
+        x, y = self.cfg.floating_timer_x, self.cfg.floating_timer_y
+        if x >= 0 and y >= 0:
+            ft.move(x, y)
+            return
+        screen = QApplication.primaryScreen()
+        if screen is not None:
+            geo = screen.availableGeometry()
+            ft.adjustSize()
+            ft.move(geo.right() - ft.width() - 40, geo.top() + 40)
+
+    def _on_floating_timer_moved(self, x: int, y: int) -> None:
+        self.cfg = dataclass_replace(self.cfg, floating_timer_x=x, floating_timer_y=y)
+        save_config(self.cfg)
 
     def _build_menu_bar(self) -> None:
         """選單列（Menu Bar）：把不常用的 actions 放進下拉選單，與工具列共用 QAction。"""
@@ -1103,6 +1189,22 @@ class MainWindow(QMainWindow):
         m_view.addAction(act_mode_split)
         m_view.addAction(act_mode_slide)
         m_view.addSeparator()
+        self.act_qa_floating = QAction("Q&A 面板獨立視窗", self)
+        self.act_qa_floating.setCheckable(True)
+        self.act_qa_floating.setStatusTip(
+            "把 Q&A 面板拉成獨立視窗，講稿區不必讓出寬度"
+        )
+        self.act_qa_floating.toggled.connect(self._toggle_qa_floating)
+        m_view.addAction(self.act_qa_floating)
+
+        self.act_floating_timer = QAction("懸浮計時視窗", self)
+        self.act_floating_timer.setCheckable(True)
+        self.act_floating_timer.setShortcut("Ctrl+Shift+F")
+        self.act_floating_timer.setStatusTip(
+            "在其他程式上方顯示剩餘時間的小視窗（可拖曳）"
+        )
+        self.act_floating_timer.toggled.connect(self._toggle_floating_timer)
+        m_view.addAction(self.act_floating_timer)
         m_view.addAction(self.act_fullscreen)
         m_view.addSeparator()
         m_view.addAction(self.act_font_bigger)
@@ -1281,7 +1383,7 @@ class MainWindow(QMainWindow):
         else:
             self.view.set_text("")
             self.setWindowTitle(f"{self._app_title} — {session.title}")
-            self.status_recognized.setText("請載入講稿（📂 開啟講稿）")
+            self.status_recognized.setText("請先載入講稿")
 
         # 嵌入式投影片 → 直接餵給 PrompterView
         self.view.set_slide_deck(session.slide_deck)
@@ -1510,7 +1612,7 @@ class MainWindow(QMainWindow):
         pdf_path: Path
         if p.suffix.lower() in (".pptx", ".ppt"):
             try:
-                self.status_recognized.setText("⏳ 正在轉換 PPTX → PDF…")
+                self.status_recognized.setText("正在轉換 PPTX → PDF…")
                 QApplication.processEvents()
                 pdf_path = convert_pptx_to_pdf(p)
             except PptxConversionError as e:
@@ -1907,7 +2009,8 @@ class MainWindow(QMainWindow):
                 compute_type=self.cfg.compute_type,
                 initial_prompt=self.transcript.full_text[:200],
             )
-            self.act_start.setText("⏸ 取消")
+            self.act_start.setText("取消")
+            self.act_start.setIcon(icon("close"))
             self.status_recognized.setText("載入模型中…")
             return
 
@@ -1931,7 +2034,8 @@ class MainWindow(QMainWindow):
         )
         self.audio.start(device=device_arg, loopback=use_loopback)
         self.timer_ctrl.start()
-        self.act_start.setText("⏸ 暫停")
+        self.act_start.setText("暫停")
+        self.act_start.setIcon(icon("pause"))
         self.status_recognized.setText("辨識中…")
         self._pending_start = False
 
@@ -1940,12 +2044,14 @@ class MainWindow(QMainWindow):
         if self._pending_start and self.loading_overlay.isVisible():
             self._pending_start = False
             self.loading_overlay.fade_out_and_hide()
-            self.act_start.setText("▶ 開始")
+            self.act_start.setText("開始")
+            self.act_start.setIcon(icon("play"))
             self.status_recognized.setText("已取消載入")
             return
         self.audio.stop()
         self.timer_ctrl.pause()
-        self.act_start.setText("▶ 繼續")
+        self.act_start.setText("繼續")
+        self.act_start.setIcon(icon("play"))
         self.status_recognized.setText("已暫停。")
 
     def _reset_position(self) -> None:
@@ -2746,7 +2852,7 @@ class MainWindow(QMainWindow):
     def _enter_qa_mode(self) -> None:
         self.qa_panel.show()
         self.act_qa_mode.setChecked(True)
-        self.act_qa_mode.setText("🎤 Q&A 模式 (ON)")
+        self.act_qa_mode.setText("Q&A 模式")
         # 自動勾選「翻譯中文」：觀眾可能用英文提問，翻譯即時給中文
         if hasattr(self.qa_panel, "translate_check") and not self.qa_panel.translate_check.isChecked():
             self.qa_panel.translate_check.setChecked(True)
@@ -2849,7 +2955,7 @@ class MainWindow(QMainWindow):
     def _exit_qa_mode(self) -> None:
         self.qa_panel.hide()
         self.act_qa_mode.setChecked(False)
-        self.act_qa_mode.setText("🎤 Q&A 模式")
+        self.act_qa_mode.setText("Q&A 模式")
         # 切回預設語言
         self._switch_recognizer_language(self.cfg.language)
         # 切回麥克風輸入（離開 QA → 報告繼續）
@@ -2944,11 +3050,11 @@ class MainWindow(QMainWindow):
                 if auto_started_audio:
                     self.audio.stop()
                 return
-            self.act_record.setText("⏹ 停止錄影")
+            self.act_record.setText("停止錄影")
             self.status_recording.setText("🔴 錄影中 00:00")
         else:
             self.recorder.stop()
-            self.act_record.setText("⏺ 錄影")
+            self.act_record.setText("錄影")
             self.status_recording.setText("")
 
     def _on_record_started(self, path: str) -> None:
@@ -3007,7 +3113,7 @@ class MainWindow(QMainWindow):
         self.act_record.blockSignals(True)
         self.act_record.setChecked(False)
         self.act_record.blockSignals(False)
-        self.act_record.setText("⏺ 錄影")
+        self.act_record.setText("錄影")
         self.status_recording.setText("")
 
     def _toggle_edit_mode(self, checked: bool) -> None:
@@ -3259,9 +3365,9 @@ class MainWindow(QMainWindow):
         ):
             act.setVisible(enabled)
         if enabled:
-            self.act_edit_mode.setText("✏ 編輯模式 (ON)")
+            self.act_edit_mode.setText("編輯模式")
         else:
-            self.act_edit_mode.setText("✏ 編輯模式")
+            self.act_edit_mode.setText("編輯模式")
         # 保持 checkbox 同步（若從程式端呼叫也能一致）
         if self.act_edit_mode.isChecked() != enabled:
             self.act_edit_mode.blockSignals(True)
@@ -3482,6 +3588,11 @@ class MainWindow(QMainWindow):
         event.acceptProposedAction()
 
     def closeEvent(self, event) -> None:
+        ft = getattr(self, "floating_timer", None)
+        if ft is not None:
+            ft.close()
+        if getattr(self, "qa_panel", None) is not None and self.qa_panel.isWindow():
+            self.qa_panel.close()
         # 先把當前 view 狀態存回 active session（編輯中可能還沒 flush）
         if self._bound_session_id:
             active = self.session_manager.get(self._bound_session_id)
