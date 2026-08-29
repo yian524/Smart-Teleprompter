@@ -39,3 +39,6 @@ dist/
 models/
 *.bin
 *.pt
+
+# Claude Code
+.claude/
