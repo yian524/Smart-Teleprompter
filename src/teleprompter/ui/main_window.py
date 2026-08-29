@@ -376,10 +376,6 @@ class MainWindow(QMainWindow):
         self.qa_panel.set_backup_start_page(self.cfg.qa_backup_start_page)
         self.qa_panel.karaoke_switch.setChecked(self.cfg.qa_karaoke_enabled)
         self._restore_last_qa_library()
-        if self.cfg.qa_panel_floating:
-            self.act_qa_floating.setChecked(True)
-        if self.cfg.floating_timer_enabled:
-            self.act_floating_timer.setChecked(True)
         # 降低最小寬度：原本太寬會吃掉講稿區；280px 夠顯示問答欄 + 語言 combo
         self.qa_panel.setMinimumWidth(280)
         self.main_splitter.addWidget(self.qa_panel)
@@ -557,6 +553,12 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, self._move_to_secondary_screen)
 
         # 啟動後載入 sessions.json（延遲一下讓 UI 先渲染完）
+        # 這兩個開關的 QAction 在工具列/選單建立後才存在 → 放在這裡還原
+        if self.cfg.qa_panel_floating:
+            self.act_qa_floating.setChecked(True)
+        if self.cfg.floating_timer_enabled:
+            self.act_floating_timer.setChecked(True)
+
         QTimer.singleShot(50, self._restore_sessions_or_bootstrap)
         # 啟動時依視窗大小套一次自適應版面
         QTimer.singleShot(0, self._apply_orientation_layout)
@@ -684,6 +686,20 @@ class MainWindow(QMainWindow):
         self.sb_target_min.valueChanged.connect(self._on_target_minutes_changed)
         self._sb_target_min_action = tb.addWidget(self.sb_target_min)
         self._sb_target_min_action.setVisible(self.cb_target.isChecked())
+
+        # 懸浮計時：放在時間旁邊，因為它就是「時間」這件事的延伸。
+        # 它本身也能獨立計時（自己輸入分鐘、倒數/正數、開始暫停），
+        # 只想單純計時的場合不必按主程式的「開始」去啟動語音辨識。
+        self.act_floating_timer = QAction("懸浮計時", self)
+        self.act_floating_timer.setIcon(icon("clock"))
+        self.act_floating_timer.setCheckable(True)
+        self.act_floating_timer.setShortcut("Ctrl+Shift+F")
+        self.act_floating_timer.setToolTip(
+            "另開一個永遠置頂的計時視窗（可獨立計時，不必啟動辨識）\n"
+            "Ctrl+Shift+F"
+        )
+        self.act_floating_timer.toggled.connect(self._toggle_floating_timer)
+        tb.addAction(self.act_floating_timer)
 
         self.act_reset_timer = QAction("重置計時", self)
         self.act_reset_timer.setIcon(icon("reset"))
@@ -1205,13 +1221,6 @@ class MainWindow(QMainWindow):
         self.act_qa_floating.toggled.connect(self._toggle_qa_floating)
         m_view.addAction(self.act_qa_floating)
 
-        self.act_floating_timer = QAction("懸浮計時視窗", self)
-        self.act_floating_timer.setCheckable(True)
-        self.act_floating_timer.setShortcut("Ctrl+Shift+F")
-        self.act_floating_timer.setStatusTip(
-            "在其他程式上方顯示剩餘時間的小視窗（可拖曳）"
-        )
-        self.act_floating_timer.toggled.connect(self._toggle_floating_timer)
         m_view.addAction(self.act_floating_timer)
         m_view.addAction(self.act_fullscreen)
         m_view.addSeparator()

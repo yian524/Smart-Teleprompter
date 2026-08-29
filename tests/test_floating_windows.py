@@ -265,3 +265,140 @@ def test_double_click_toggles_big_mode(win, app):
     ft.mouseDoubleClickEvent(None)
     app.processEvents()
     assert ft.width() == DEFAULT_SIZE.width(), "再雙擊應回到預設"
+
+
+# ============================================================
+# 懸浮計時：獨立計時（不啟動語音辨識）
+# ============================================================
+
+def test_toolbar_has_floating_timer_button(win):
+    """開關要在時間旁邊，不是只藏在選單裡。"""
+    acts = [a for a in win._main_toolbar.actions() if not a.isSeparator()]
+    assert win.act_floating_timer in acts
+    # 位置緊接目標時長之後
+    idx_timer = acts.index(win.act_floating_timer)
+    idx_target = acts.index(win._sb_target_min_action)
+    assert idx_timer == idx_target + 1
+
+
+def test_standalone_timer_runs_without_recognition(win, app):
+    """在懸浮視窗按開始 → 只有它自己在跑，主程式的辨識與計時都不動。"""
+    win.act_floating_timer.setChecked(True)
+    app.processEvents()
+    ft = win.floating_timer
+
+    assert not ft.solo_timer.is_running()
+    ft.toggle_solo_run()
+    app.processEvents()
+
+    assert ft.solo_timer.is_running(), "自己的計時器要開始跑"
+    assert not win.timer_ctrl.is_running(), "不得連帶啟動主程式念稿計時"
+    assert not win.audio.is_running(), "不得啟動語音辨識"
+    assert ft.btn_run.text() == "暫停"
+
+    ft.toggle_solo_run()
+    app.processEvents()
+    assert not ft.solo_timer.is_running()
+    assert ft.btn_run.text() == "開始"
+
+
+def test_standalone_minutes_are_independent(win, app):
+    """懸浮視窗自己的分鐘數不影響主程式的目標時長設定。"""
+    win.act_floating_timer.setChecked(True)
+    app.processEvents()
+    ft = win.floating_timer
+
+    main_target_before = win.timer_ctrl.target_ms
+    ft.spin_minutes.setValue(5)
+    app.processEvents()
+
+    assert ft.solo_timer.target_ms == 5 * 60 * 1000
+    assert win.timer_ctrl.target_ms == main_target_before
+
+
+def test_count_up_mode(win, app):
+    """切正數：目標歸零，計時器只往上累加。"""
+    win.act_floating_timer.setChecked(True)
+    app.processEvents()
+    ft = win.floating_timer
+
+    ft.btn_mode.setChecked(True)
+    ft._toggle_count_direction()
+    app.processEvents()
+
+    assert ft.btn_mode.text() == "正數"
+    assert ft.solo_timer.target_ms == 0
+    assert not ft.spin_minutes.isEnabled(), "正數模式下分鐘輸入無意義，應停用"
+    assert ft.main_label.text() == "00:00"
+
+    ft.btn_mode.setChecked(False)
+    ft._toggle_count_direction()
+    app.processEvents()
+    assert ft.btn_mode.text() == "倒數"
+    assert ft.spin_minutes.isEnabled()
+
+
+def test_idle_display_shows_prepared_value(win, app):
+    """還沒按開始時要顯示預備時間（15:00），不是 --:--。"""
+    win.act_floating_timer.setChecked(True)
+    app.processEvents()
+    ft = win.floating_timer
+
+    ft.spin_minutes.setValue(20)
+    ft.reset_solo()
+    app.processEvents()
+    assert ft.main_label.text() == "20:00"
+
+
+def test_reset_stops_and_clears(win, app):
+    win.act_floating_timer.setChecked(True)
+    app.processEvents()
+    ft = win.floating_timer
+
+    ft.toggle_solo_run()
+    app.processEvents()
+    ft.reset_solo()
+    app.processEvents()
+
+    assert not ft.solo_timer.is_running()
+    assert ft.solo_timer.elapsed_ms == 0
+    assert ft.btn_run.text() == "開始"
+
+
+def test_standalone_mode_ignores_main_timer_updates(win, app):
+    """使用者自己操作後，主程式的念稿計時不得再蓋掉畫面。"""
+    win.act_floating_timer.setChecked(True)
+    app.processEvents()
+    ft = win.floating_timer
+
+    ft.spin_minutes.setValue(10)
+    ft.reset_solo()          # → 進入獨立模式，顯示 10:00
+    app.processEvents()
+    assert ft.main_label.text() == "10:00"
+
+    win.timer_ctrl.state_changed.emit(TimerState(
+        elapsed_ms=65_000, target_ms=900_000,
+        remaining_ms=835_000, time_color=TimeColor.GREEN,
+    ))
+    app.processEvents()
+    assert ft.main_label.text() == "10:00", "獨立模式不該被主計時覆蓋"
+
+
+def test_follow_mode_can_be_restored(win, app):
+    """切回跟隨模式後，又會顯示主程式的念稿計時。"""
+    win.act_floating_timer.setChecked(True)
+    app.processEvents()
+    ft = win.floating_timer
+
+    ft.toggle_solo_run()
+    app.processEvents()
+    ft.follow_main_timer()
+    app.processEvents()
+    assert not ft.solo_timer.is_running(), "切回跟隨時獨立計時應停下"
+
+    win.timer_ctrl.state_changed.emit(TimerState(
+        elapsed_ms=65_000, target_ms=900_000,
+        remaining_ms=835_000, time_color=TimeColor.GREEN,
+    ))
+    app.processEvents()
+    assert ft.main_label.text() == "13:55"
