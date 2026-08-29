@@ -373,10 +373,13 @@ def parse_transcript(text: str) -> Transcript:
                 if s.start >= page_end_char:
                     sent_end_idx = si
                     break
-            if sent_start_idx is None:
-                continue  # 此頁沒有任何句子（分頁符之間只有空白）
-            if sent_end_idx <= sent_start_idx:
-                continue
+            # 沒有句子的頁（只有 `# Slide N` 標題或全空白）仍保留為「空頁」：
+            # 頁數必須與投影片張數對得起來，否則 PrompterView 會把多出來的頁
+            # 畫成不可點擊的虛擬頁（使用者症狀：第 2 頁以後游標放不進去）。
+            if sent_start_idx is None or sent_end_idx <= sent_start_idx:
+                anchor = sent_start_idx if sent_start_idx is not None else len(sentences)
+                sent_start_idx = anchor
+                sent_end_idx = anchor          # start == end → contains_sentence 恆 False
             page_text = text[page_start_char:page_end_char]
             title = _extract_page_title(page_text)
             pages.append(Page(

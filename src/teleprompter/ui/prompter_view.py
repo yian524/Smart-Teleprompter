@@ -38,6 +38,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QInputDialog, QTextEdit
 
 from ..core.annotations import Annotation
+from ..core.transcript_loader import _PAGE_SEPARATOR_RE
 from .slide_mode_view import _paint_sticky_body
 
 
@@ -682,7 +683,10 @@ class PrompterView(QTextEdit):
                 be = bs + block.length() - 1
                 if be > bs:
                     self._md_styled_ranges.append((bs, be))
-                if stripped in ("---", "===", "***"):
+                # 用與 transcript_loader 同一套分頁正則（`---+` / `===+` / `***+`）；
+                # 舊版只認剛好 3 個字元，寫 `----` 時這裡算不到、parse_transcript 卻算得到，
+                # 兩邊頁數口徑一錯開就會出現「點不進去的虛擬頁」。
+                if _PAGE_SEPARATOR_RE.match(stripped):
                     self._hr_blocks.append(block.blockNumber())
             else:
                 # 非全行 MD → 掃 inline 註解（讓 karaoke 高亮跳過）
