@@ -49,6 +49,7 @@ class PrompterView(QTextEdit):
     font_size_changed = Signal(int)
     edit_mode_changed = Signal(bool)
     text_edited = Signal(str)  # 編輯模式關閉時發出最新文本
+    pages_missing = Signal(int)  # 編輯模式下偵測到「有投影片但沒講稿區塊」的頁數
     slide_double_clicked = Signal(int)  # 雙擊右欄 slide → 發該 page_no
     annotations_changed = Signal()    # 標註有變動 → 通知 MainWindow 存檔
     tool_requested = Signal(str)      # 要求 MainWindow 切成其他 tool
@@ -1393,6 +1394,10 @@ class PrompterView(QTextEdit):
 
         # Phase 2：slide 數多於講稿頁 → 增加虛擬頁空間
         extra_pages = max(0, total_slides - n_transcript_covered)
+        # 虛擬頁只有空白高度、沒有 QTextBlock，游標放不進去。編輯模式下發訊號
+        # 讓 MainWindow 立刻補上區塊（例如使用者把文字整段刪掉時的保底）。
+        if extra_pages > 0 and self._edit_mode:
+            self.pages_missing.emit(extra_pages)
         if extra_pages > 0:
             end_y = self._page_boundaries[-1][1] if self._page_boundaries else 0
             total_virtual_h = 0

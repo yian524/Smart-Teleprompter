@@ -363,6 +363,7 @@ class MainWindow(QMainWindow):
         self.qa_panel = QAPanel()
         self.qa_panel.close_qa_mode.connect(self._exit_qa_mode)
         self.qa_panel.language_changed.connect(self._switch_recognizer_language)
+        self.view.pages_missing.connect(self._on_pages_missing)
         self.qa_panel.goto_page.connect(self._on_qa_goto_page)
         self.qa_panel.karaoke_toggled.connect(self._on_qa_karaoke_toggled)
         self.qa_panel.qa_path_changed.connect(self._on_qa_path_changed)
@@ -389,6 +390,7 @@ class MainWindow(QMainWindow):
         self._pending_start: bool = False
         # QA 模式獨立啟動時的 pending：模型就緒後啟動音訊（loopback）
         self._qa_pending_audio_start: bool = False
+        self._pages_missing_guard: bool = False
 
         # ---- 狀態列 ----
         sb = QStatusBar()
@@ -2967,6 +2969,21 @@ class MainWindow(QMainWindow):
         text = "\n---\n\n".join(parts)
         transcript = load_from_string(text)
         self._apply_transcript(transcript, source_path="")
+
+    def _on_pages_missing(self, n: int) -> None:
+        """編輯模式下發現有投影片沒有對應講稿區塊 → 立刻補齊。
+
+        典型情境：使用者在編輯模式把講稿整段刪掉，頁數掉回 1，
+        後面幾十頁就變成點不進去的空白。補完重新排版即可恢復可編輯。
+        """
+        if n <= 0 or self._pages_missing_guard:
+            return
+        self._pages_missing_guard = True          # 補頁會再觸發 relayout，擋掉遞迴
+        try:
+            if self._expand_transcript_for_slides() > 0:
+                self.view.set_edit_mode(True)     # 保持在編輯模式
+        finally:
+            self._pages_missing_guard = False
 
     def _expand_transcript_for_slides(self) -> int:
         """若 slide_deck 的頁數 > 講稿頁數，為每張多餘的 slide 追加一個空白 `---` + `# Slide N` 區塊。
