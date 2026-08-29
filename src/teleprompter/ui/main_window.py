@@ -366,6 +366,7 @@ class MainWindow(QMainWindow):
         self.qa_panel.qa_path_changed.connect(self._on_qa_path_changed)
         self.qa_panel.set_backup_start_page(self.cfg.qa_backup_start_page)
         self.qa_panel.karaoke_switch.setChecked(self.cfg.qa_karaoke_enabled)
+        self._restore_last_qa_library()
         # 降低最小寬度：原本太寬會吃掉講稿區；280px 夠顯示問答欄 + 語言 combo
         self.qa_panel.setMinimumWidth(280)
         self.main_splitter.addWidget(self.qa_panel)
@@ -1154,7 +1155,6 @@ class MainWindow(QMainWindow):
     def _restore_sessions_or_bootstrap(self) -> None:
         """啟動時嘗試從 sessions.json 還原；否則 bootstrap 一個空 session，
         再嘗試 legacy `last_transcript_path` 還原。"""
-        self._restore_last_qa_library()
         sessions_path = default_sessions_path()
         self.session_manager.load_from_disk(sessions_path)
         if len(self.session_manager) > 0:

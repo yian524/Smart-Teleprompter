@@ -71,7 +71,7 @@ class QAPanel(QWidget):
     qa_path_changed = Signal(str)    # 成功載入的 QA 庫路徑 → 主視窗寫回設定
 
     # 低於此分數視為「沒有合適答案」，不顯示答案正文（避免照唸到錯內容）
-    NO_MATCH_SCORE = 50.0
+    NO_MATCH_SCORE = 70.0
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -344,6 +344,17 @@ class QAPanel(QWidget):
             self.answer_text.clear()
             self.match_info.setText("")
             return
+        if match.score < self.NO_MATCH_SCORE:
+            # 守門優先於信心判定：拼音比對會讓任意中文句都拿到基礎分，
+            # 光看 is_confident 會把無關提問誤判成命中（實測 61 分仍 confident）
+            self.match_info.setText(
+                f"❔ 未匹配到合適答案（最高信心僅 {match.score:.0f}），請自由回答"
+            )
+            self.match_info.setStyleSheet("color: #F44336;")
+            self.answer_text.clear()
+            self.candidates_label.setText("")
+            return
+
         if match.is_confident:
             self.match_info.setText(
                 f"🎯 匹配到：「{match.item.question}」（信心 {match.score:.0f}）"
