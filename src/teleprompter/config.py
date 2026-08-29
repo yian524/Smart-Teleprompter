@@ -55,6 +55,13 @@ class AppConfig:
     qa_karaoke_enabled: bool = False
     # Q&A 庫裡 B01 對應的實際投影片頁碼（1-based）；0 = 不換算備答編號
     qa_backup_start_page: int = 0
+    # 懸浮計時視窗：是否開啟、上次的螢幕位置
+    floating_timer_enabled: bool = False
+    # Q&A 面板是否以獨立視窗呈現（不佔講稿版面）
+    qa_panel_floating: bool = False
+    qa_panel_geometry: str = ""
+    floating_timer_x: int = -1
+    floating_timer_y: int = -1
 
 
 _MIGRATION_KEY = "_migration_streaming_v1"
