@@ -260,6 +260,8 @@ class MainWindow(QMainWindow):
         from .. import __version__
         self._app_title = f"智能語音提詞機 v{__version__}"
         self.setWindowTitle(self._app_title)
+        # 直接把講稿或投影片拖進視窗就能載入，不必先開檔案對話框
+        self.setAcceptDrops(True)
         # 套 app icon（若 main.py 沒設也能 fallback）
         try:
             from ..main import make_app_icon
@@ -589,6 +591,7 @@ class MainWindow(QMainWindow):
 
         self.act_open = QAction("講稿", self)
         self.act_open.setIcon(icon("folder"))
+        self.act_open.setToolTip("開啟講稿檔（txt / md / docx）\n也可以直接把檔案拖進視窗")
         self.act_open.setShortcut(QKeySequence.StandardKey.Open)
         self.act_open.triggered.connect(self._open_file)
         tb.addAction(self.act_open)
@@ -606,6 +609,7 @@ class MainWindow(QMainWindow):
 
         self.act_open_slides = QAction("投影片", self)
         self.act_open_slides.setIcon(icon("slides"))
+        self.act_open_slides.setToolTip("載入投影片（pdf / pptx）\n也可以直接把檔案拖進視窗")
         self.act_open_slides.setToolTip("載入 PDF 或 PPTX 作為右側視覺參考")
         self.act_open_slides.triggered.connect(self._open_slides)
         tb.addAction(self.act_open_slides)
@@ -1582,6 +1586,78 @@ class MainWindow(QMainWindow):
         )
         if path:
             self.load_file(path)
+
+    # ---------- 拖放載入 ----------
+
+    # 副檔名 → 要走哪條載入流程；.md 兩邊都可能，預設當講稿
+    SCRIPT_SUFFIXES = (".txt", ".md", ".markdown", ".docx")
+    SLIDE_SUFFIXES = (".pdf", ".pptx", ".ppt")
+
+    def _classify_dropped(self, paths: list[str]) -> tuple[list[str], list[str]]:
+        """把拖進來的檔案分成「講稿」與「投影片」兩堆，不認得的忽略。"""
+        scripts, slides = [], []
+        for raw in paths:
+            suffix = Path(raw).suffix.lower()
+            if suffix in self.SLIDE_SUFFIXES:
+                slides.append(raw)
+            elif suffix in self.SCRIPT_SUFFIXES:
+                scripts.append(raw)
+        return scripts, slides
+
+    def dragEnterEvent(self, event) -> None:  # noqa: D102
+        if not event.mimeData().hasUrls():
+            return
+        paths = [u.toLocalFile() for u in event.mimeData().urls() if u.isLocalFile()]
+        scripts, slides = self._classify_dropped(paths)
+        if not scripts and not slides:
+            return
+        event.acceptProposedAction()
+        self.status_recognized.setText(self.describe_drop(paths))
+
+    def describe_drop(self, paths: list[str]) -> str:
+        """拖到視窗上方時的提示：先講清楚放開會載入什麼。"""
+        scripts, slides = self._classify_dropped(paths)
+        kinds = []
+        if scripts:
+            kinds.append(f"講稿 {Path(scripts[0]).name}")
+        if slides:
+            kinds.append(f"投影片 {Path(slides[0]).name}")
+        return "放開以載入：" + "　·　".join(kinds)
+
+    def dragMoveEvent(self, event) -> None:  # noqa: D102
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dragLeaveEvent(self, event) -> None:  # noqa: D102, ARG002
+        self.status_recognized.setText("已取消拖放")
+
+    def dropEvent(self, event) -> None:  # noqa: D102
+        paths = [u.toLocalFile() for u in event.mimeData().urls() if u.isLocalFile()]
+        if self.load_dropped_paths(paths):
+            event.acceptProposedAction()
+
+    def load_dropped_paths(self, paths: list[str]) -> bool:
+        """載入拖進來的檔案；回傳是否有東西被載入。"""
+        scripts, slides = self._classify_dropped(paths)
+        if not scripts and not slides:
+            self.status_recognized.setText(
+                "這個檔案格式不支援（講稿：txt/md/docx；投影片：pdf/pptx）"
+            )
+            return False
+        loaded = []
+        # 先載講稿再載投影片：投影片流程會依講稿現況決定要不要抽取備忘稿
+        if scripts:
+            self.load_file(scripts[0])
+            loaded.append(Path(scripts[0]).name)
+        if slides:
+            self.load_slides(slides[0])
+            loaded.append(Path(slides[0]).name)
+        ignored = len(paths) - len(loaded)
+        msg = "已載入：" + "　·　".join(loaded)
+        if ignored > 0:
+            msg += f"（另有 {ignored} 個檔案格式不支援，已略過）"
+        self.status_recognized.setText(msg)
+        return True
 
     def load_file(self, path: str | Path) -> None:
         try:
