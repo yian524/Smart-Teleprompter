@@ -1105,7 +1105,9 @@ class MainWindow(QMainWindow):
             if getattr(self, "floating_timer", None) is None:
                 self.floating_timer = FloatingTimer()
                 self.timer_ctrl.state_changed.connect(self.floating_timer.update_state)
-                self.floating_timer.moved.connect(self._on_floating_timer_moved)
+                self.floating_timer.geometry_changed.connect(
+                    self._on_floating_timer_geometry
+                )
                 self.floating_timer.closed.connect(
                     lambda: self.act_floating_timer.setChecked(False)
                 )
@@ -1117,10 +1119,13 @@ class MainWindow(QMainWindow):
         save_config(self.cfg)
 
     def _place_floating_timer(self) -> None:
-        """還原上次位置；沒有記錄就放到主螢幕右上角。"""
+        """還原上次的位置與大小；沒有記錄就放到主螢幕右上角。"""
         ft = getattr(self, "floating_timer", None)
         if ft is None:
             return
+        w, h = self.cfg.floating_timer_w, self.cfg.floating_timer_h
+        if w > 0 and h > 0:
+            ft.resize(w, h)
         x, y = self.cfg.floating_timer_x, self.cfg.floating_timer_y
         if x >= 0 and y >= 0:
             ft.move(x, y)
@@ -1128,11 +1133,14 @@ class MainWindow(QMainWindow):
         screen = QApplication.primaryScreen()
         if screen is not None:
             geo = screen.availableGeometry()
-            ft.adjustSize()
             ft.move(geo.right() - ft.width() - 40, geo.top() + 40)
 
-    def _on_floating_timer_moved(self, x: int, y: int) -> None:
-        self.cfg = dataclass_replace(self.cfg, floating_timer_x=x, floating_timer_y=y)
+    def _on_floating_timer_geometry(self, x: int, y: int, w: int, h: int) -> None:
+        self.cfg = dataclass_replace(
+            self.cfg,
+            floating_timer_x=x, floating_timer_y=y,
+            floating_timer_w=w, floating_timer_h=h,
+        )
         save_config(self.cfg)
 
     def _build_menu_bar(self) -> None:

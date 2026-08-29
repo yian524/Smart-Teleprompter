@@ -161,3 +161,107 @@ def test_hidden_qa_panel_stays_hidden_when_detached(win, app):
     win.act_qa_floating.setChecked(True)
     app.processEvents()
     assert not win.qa_panel.isVisible()
+
+
+# ============================================================
+# 懸浮計時：縮放與可讀性
+# ============================================================
+
+def test_floating_timer_has_resize_grip(win, app):
+    """右下角要有可拖曳的縮放握把。"""
+    from PySide6.QtWidgets import QSizeGrip
+
+    win.act_floating_timer.setChecked(True)
+    app.processEvents()
+    assert isinstance(win.floating_timer.size_grip, QSizeGrip)
+
+
+def test_font_scales_with_window_size(win, app):
+    """拉大視窗，數字要跟著變大——這是台上看得清楚的關鍵。"""
+    from PySide6.QtCore import QSize
+
+    win.act_floating_timer.setChecked(True)
+    app.processEvents()
+    ft = win.floating_timer
+
+    ft.resize(QSize(200, 110))
+    app.processEvents()
+    small = ft._font_px()
+
+    ft.resize(QSize(620, 300))
+    app.processEvents()
+    large = ft._font_px()
+
+    assert large > small * 2, f"放大後字級應顯著變大（{small} → {large}）"
+    assert small >= 22, "最小尺寸下仍要有基本可讀字級"
+
+
+def test_detail_line_hides_when_too_small(win, app):
+    """空間不夠時，說明字讓位給時間數字。"""
+    from PySide6.QtCore import QSize
+
+    win.act_floating_timer.setChecked(True)
+    app.processEvents()
+    ft = win.floating_timer
+
+    ft.resize(QSize(190, 100))
+    app.processEvents()
+    assert not ft.sub_label.isVisible()
+
+    ft.resize(QSize(340, 168))
+    app.processEvents()
+    assert ft.sub_label.isVisible()
+
+
+def test_size_is_clamped(win, app):
+    """縮放有上下限，避免拖到小得看不見或大到蓋住整個螢幕。"""
+    from PySide6.QtCore import QSize
+    from teleprompter.ui.floating_timer import MAX_SIZE, MIN_SIZE
+
+    win.act_floating_timer.setChecked(True)
+    app.processEvents()
+    ft = win.floating_timer
+
+    ft.resize(QSize(50, 30))
+    app.processEvents()
+    assert ft.width() >= MIN_SIZE.width() and ft.height() >= MIN_SIZE.height()
+
+    ft.resize(QSize(4000, 3000))
+    app.processEvents()
+    assert ft.width() <= MAX_SIZE.width() and ft.height() <= MAX_SIZE.height()
+
+
+def test_geometry_is_reported_for_persistence(win, app):
+    """縮放/移動後要回報幾何，設定才存得住。"""
+    from PySide6.QtCore import QSize
+
+    win.act_floating_timer.setChecked(True)
+    app.processEvents()
+    ft = win.floating_timer
+
+    seen = []
+    ft.geometry_changed.connect(lambda x, y, w, h: seen.append((w, h)))
+    ft.resize(QSize(500, 240))
+    app.processEvents()
+    ft._emit_geometry()
+    assert seen and seen[-1] == (ft.width(), ft.height())
+
+
+def test_double_click_toggles_big_mode(win, app):
+    """雙擊在預設大小與大字模式間切換（台上要放大時最快的操作）。"""
+    from PySide6.QtCore import QSize
+    from teleprompter.ui.floating_timer import DEFAULT_SIZE
+
+    win.act_floating_timer.setChecked(True)
+    app.processEvents()
+    ft = win.floating_timer
+    ft.resize(DEFAULT_SIZE)
+    app.processEvents()
+
+    ft.mouseDoubleClickEvent(None)
+    app.processEvents()
+    assert ft.width() > DEFAULT_SIZE.width(), "第一次雙擊應放大"
+
+    ft.mouseDoubleClickEvent(None)
+    app.processEvents()
+    assert ft.width() == DEFAULT_SIZE.width(), "再雙擊應回到預設"
