@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>提詞機工具列改版提案</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* ── 單主題（深色）：刻意貼近 app 實際外觀，模擬條的對比才是真的 ── */
+:root{
+  --ground:#17181b; --panel:#1f2024; --panel-2:#26272c;
+  --chrome:#252525; --chrome-2:#2e2f34; --canvas:#1e1e1e;
+  --ink:#e8e6e1; --muted:#9a9891; --faint:#66655f; --line:#33343a;
+  --qt-blue:#0e639c;
+  --m-edit:#e0b04c; --m-annot:#e06c75; --m-qa:#4cc2a8; --m-kara:#a78bfa;
+  --accent:#4cc2a8;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{
+  background:var(--ground); color:var(--ink);
+  font-family:'Noto Sans TC','Microsoft JhengHei',sans-serif;
+  font-size:15px; line-height:1.75; padding:0 0 96px;
+}
+.mono{font-family:'IBM Plex Mono',Consolas,monospace}
+.wrap{max-width:1060px;margin:0 auto;padding:0 28px}
+
+/* ── header ── */
+header{border-bottom:1px solid var(--line); padding:56px 0 36px; margin-bottom:44px}
+.eyebrow{font-family:'IBM Plex Mono',monospace;font-size:12px;letter-spacing:.18em;color:var(--accent);text-transform:uppercase;margin-bottom:14px}
+h1{font-size:34px;font-weight:700;letter-spacing:.01em;text-wrap:balance;line-height:1.3}
+.lede{color:var(--muted);max-width:46em;margin-top:14px}
+.lede b{color:var(--ink);font-weight:500}
+
+/* ── section scaffolding ── */
+section{margin-bottom:72px}
+.plan-head{display:flex;align-items:baseline;gap:14px;border-bottom:1px solid var(--line);padding-bottom:12px;margin-bottom:8px}
+.plan-no{font-family:'IBM Plex Mono',monospace;font-size:13px;color:var(--faint)}
+h2{font-size:23px;font-weight:700}
+.badge{font-size:12px;font-weight:500;padding:2px 10px;border-radius:999px;border:1px solid var(--accent);color:var(--accent);margin-left:auto;white-space:nowrap}
+.plan-desc{color:var(--muted);max-width:52em;margin:10px 0 24px}
+.plan-desc b{color:var(--ink);font-weight:500}
+
+/* ── app-window mock frame ── */
+.mockframe{background:var(--canvas);border:1px solid #3a3b40;border-radius:8px;overflow:hidden;margin:18px 0 6px}
+.statecap{font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--faint);margin-top:22px}
+.statecap b{color:var(--muted);font-weight:500}
+.titlebar{display:flex;align-items:center;gap:8px;background:#1b1b1d;padding:6px 12px;font-size:12px;color:var(--faint);border-bottom:1px solid #303136}
+.dot{width:9px;height:9px;border-radius:50%;background:#3d3e43}
+.menurow{display:flex;gap:18px;background:#232325;padding:5px 14px;font-size:12.5px;color:var(--muted);border-bottom:1px solid #303136}
+
+/* toolbar strip primitives */
+.tbar{display:flex;align-items:center;gap:3px;background:var(--chrome);padding:6px 10px;flex-wrap:wrap}
+.tb{display:inline-flex;align-items:center;gap:6px;padding:6px 11px;border-radius:5px;font-size:13px;color:#e0e0e0;white-space:nowrap}
+.tb:hover{background:#3a3a3a}
+.tb.primary{background:var(--qt-blue);color:#fff;font-weight:500}
+.tb.on{background:#3a3a3a;box-shadow:inset 0 0 0 1px #55565c}
+.tsep{width:1px;height:20px;background:#3d3e43;margin:0 6px;flex:none}
+.tspin{font-family:'IBM Plex Mono',monospace;font-size:12.5px;background:#1c1c1e;border:1px solid #3d3e43;border-radius:4px;padding:3px 9px;color:#cfcdc7}
+.tgap{flex:1}
+/* module switch pills（列上的模組開關） */
+.msw{display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border-radius:999px;font-size:12.5px;color:var(--muted);border:1px solid #3d3e43}
+.msw .k{width:8px;height:8px;border-radius:50%;background:#4a4b50;flex:none}
+.msw.act{color:#101113;font-weight:500;border-color:transparent}
+.msw.act .k{background:#101113;opacity:.55}
+.msw.e.act{background:var(--m-edit)} .msw.a.act{background:var(--m-annot)}
+.msw.q.act{background:var(--m-qa)} .msw.x.act{background:var(--m-kara)}
+/* module tool row（滑出的第二列） */
+.modrow{display:flex;align-items:center;gap:3px;padding:6px 10px 6px 8px;background:var(--chrome-2);border-top:1px solid #303136;flex-wrap:wrap}
+.modtag{font-family:'IBM Plex Mono',monospace;font-size:11.5px;font-weight:500;color:#101113;padding:3px 10px;border-radius:4px;margin-right:8px;flex:none}
+.modrow.e{box-shadow:inset 3px 0 0 var(--m-edit)} .modrow.e .modtag{background:var(--m-edit)}
+.modrow.a{box-shadow:inset 3px 0 0 var(--m-annot)} .modrow.a .modtag{background:var(--m-annot)}
+.modrow.q{box-shadow:inset 3px 0 0 var(--m-qa)} .modrow.q .modtag{background:var(--m-qa)}
+.modrow.x{box-shadow:inset 3px 0 0 var(--m-kara)} .modrow.x .modtag{background:var(--m-kara)}
+.cdot{width:15px;height:15px;border-radius:50%;display:inline-block;border:2px solid #1a1a1a}
+.canvasarea{display:flex;min-height:118px}
+.canvasarea .script{flex:1;padding:16px 20px;color:#565752;font-size:13px;line-height:1.9}
+.canvasarea .script .lit{color:#cfcdc7}
+.canvasarea .script .kara{color:#7a7a7a;text-decoration:none}
+.canvasarea .slide{width:230px;background:#f2ede2;margin:12px 14px;border-radius:3px;display:flex;align-items:center;justify-content:center;color:#8a8378;font-size:12px;border-top:4px solid #2a9d8f}
+/* left rail (方案二) */
+.railwrap{display:flex}
+.rail{width:52px;background:#1c1c1f;border-right:1px solid #303136;display:flex;flex-direction:column;align-items:center;gap:6px;padding:10px 0}
+.rail .ric{width:38px;height:38px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:17px;color:var(--muted)}
+.rail .ric.cur{background:#2e2f34;color:#fff;box-shadow:inset 0 0 0 1px #4a4b50}
+.rail .ric.cur.e{box-shadow:inset 0 0 0 2px var(--m-edit)}
+.rail .rspacer{flex:1}
+.railmain{flex:1;min-width:0}
+/* capsule groups (方案三) */
+.cap{display:inline-flex;align-items:center;gap:2px;border:1px solid #3d3e43;border-radius:7px;padding:2px 4px 2px 2px;margin-left:6px}
+.cap .capname{font-family:'IBM Plex Mono',monospace;font-size:11px;padding:3px 8px;border-radius:5px;color:#101113;font-weight:500;margin-right:2px}
+.cap.e{border-color:color-mix(in srgb,var(--m-edit) 55%,transparent)} .cap.e .capname{background:var(--m-edit)}
+.cap.a{border-color:color-mix(in srgb,var(--m-annot) 55%,transparent)} .cap.a .capname{background:var(--m-annot)}
+.cap .tb{padding:4px 6px;font-size:12px}
+
+/* ── assignment tables ── */
+.tblwrap{overflow-x:auto;margin-top:26px;border:1px solid var(--line);border-radius:8px}
+table{border-collapse:collapse;width:100%;font-size:13.5px;background:var(--panel)}
+th{font-family:'IBM Plex Mono',monospace;font-size:11.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);text-align:left;padding:10px 16px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:9px 16px;border-bottom:1px solid #2a2b30;vertical-align:top;color:#cfcdc7}
+tr:last-child td{border-bottom:none}
+td:first-child{white-space:nowrap;color:var(--ink);font-weight:500}
+.chip{display:inline-block;font-family:'IBM Plex Mono',monospace;font-size:11px;padding:1px 8px;border-radius:4px;margin:1px 2px 1px 0;color:#101113;font-weight:500}
+.chip.n{background:#3d3e43;color:#cfcdc7;font-weight:400}
+.chip.e{background:var(--m-edit)} .chip.a{background:var(--m-annot)}
+.chip.q{background:var(--m-qa)} .chip.x{background:var(--m-kara)}
+.note{color:var(--faint);font-size:13px;margin-top:10px}
+
+/* ── verdict ── */
+.verdict{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:8px;padding:22px 26px;margin-top:8px}
+.verdict h3{font-size:16px;margin-bottom:8px}
+.verdict p{color:var(--muted)}
+.verdict b{color:var(--ink);font-weight:500}
+@media (max-width:720px){ h1{font-size:26px} .canvasarea .slide{display:none} }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <div class="eyebrow">Smart Teleprompter · Toolbar Redesign</div>
+    <h1>模組化工具列：三個提案</h1>
+    <p class="lede">現況：兩列共 <b>34 個控制項</b>永遠攤開，找功能靠掃描。三個提案共同原則——<b>常駐列只留演講當下要按的東西，其餘按「模組」收納，模組開啟時工具才出現、關閉即收走</b>。每案畫出「預設」與「模組啟用」兩個狀態；所有被收起的功能在選單列照舊可用（現有 30 個選單項有 24 個與工具列共用同一 Action，收納不會失去任何功能）。</p>
+  </div>
+</header>
+
+<div class="wrap">
+
+<!-- ═══════════ 方案一 ═══════════ -->
+<section id="p1">
+  <div class="plan-head">
+    <span class="plan-no mono">PLAN 01</span>
+    <h2>常駐極簡列＋模組滑出列</h2>
+    <span class="badge">建議首選</span>
+  </div>
+  <p class="plan-desc">上列永遠只有 <b>9 個常駐項</b>。右段是四顆「模組開關」：點亮任一顆，下方以該模組的識別色<b>滑出一條專屬工具列</b>，再點一下整條收走。誰開著、一眼可辨（開關變色＋色條）。與現有程式的對映最直接：第二列容器（<span class="mono">_main_toolbar_row2</span>）與編輯模式顯隱機制都已存在。</p>
+
+  <div class="statecap"><b>狀態 A</b> — 預設（演講模式，沒有任何模組開啟）</div>
+  <div class="mockframe">
+    <div class="titlebar"><span class="dot"></span><span class="dot"></span><span class="dot"></span>　智能語音提詞機 v1.5</div>
+    <div class="menurow"><span>檔案</span><span>編輯</span><span>檢視</span><span>工具</span><span>標註</span></div>
+    <div class="tbar">
+      <span class="tb primary">▶ 開始</span>
+      <span class="tsep"></span>
+      <span class="tb">📂 講稿</span><span class="tb">🖼 投影片</span>
+      <span class="tsep"></span>
+      <span class="tb">📍 回念稿</span><span class="tspin">⏲ 15 分</span>
+      <span class="tgap"></span>
+      <span class="msw e"><span class="k"></span>✏ 編輯</span>
+      <span class="msw a"><span class="k"></span>🖊 標註</span>
+      <span class="msw q"><span class="k"></span>🎤 QA</span>
+      <span class="msw x"><span class="k"></span>🎵 卡拉OK</span>
+      <span class="tsep"></span>
+      <span class="tb">⛶</span><span class="tb">⚙</span>
+    </div>
+    <div class="canvasarea">
+      <div class="script"><span class="lit">大家好，我是報告人，今天分享</span>假訊息偵測的研究成果。<br>方法分兩階段：建圖與推論⋯</div>
+      <div class="slide">Slide 1 / 33</div>
+    </div>
+  </div>
+
+  <div class="statecap"><b>狀態 B</b> — 開了「✏ 編輯」＋「🎵 卡拉OK」：各自的工具列以識別色滑出</div>
+  <div class="mockframe">
+    <div class="titlebar"><span class="dot"></span><span class="dot"></span><span class="dot"></span>　智能語音提詞機 v1.5</div>
+    <div class="menurow"><span>檔案</span><span>編輯</span><span>檢視</span><span>工具</span><span>標註</span></div>
+    <div class="tbar">
+      <span class="tb primary">▶ 開始</span>
+      <span class="tsep"></span>
+      <span class="tb">📂 講稿</span><span class="tb">🖼 投影片</span>
+      <span class="tsep"></span>
+      <span class="tb">📍 回念稿</span><span class="tspin">⏲ 15 分</span>
+      <span class="tgap"></span>
+      <span class="msw e act"><span class="k"></span>✏ 編輯</span>
+      <span class="msw a"><span class="k"></span>🖊 標註</span>
+      <span class="msw q"><span class="k"></span>🎤 QA</span>
+      <span class="msw x act"><span class="k"></span>🎵 卡拉OK</span>
+      <span class="tsep"></span>
+      <span class="tb">⛶</span><span class="tb">⚙</span>
+    </div>
+    <div class="modrow e">
+      <span class="modtag">✏ 編輯</span>
+      <span class="tb"><b>B</b></span><span class="tb"><i>I</i></span><span class="tb"><u>U</u></span><span class="tb">🖍 螢光筆</span>
+      <span class="tsep"></span>
+      <span class="tb">✖ 清格式</span><span class="tb">💬 插入註解</span><span class="tb">🧹 清理空白</span>
+      <span class="tsep"></span>
+      <span class="tspin">A− 36 pt A+</span>
+      <span class="tgap"></span><span class="tb">💾 儲存</span>
+    </div>
+    <div class="modrow x">
+      <span class="modtag">🎵 卡拉OK</span>
+      <span class="tb on">跟讀高亮：開</span><span class="tb">🎯 對齊靈敏度</span><span class="tb">↺ 重新對齊</span>
+    </div>
+    <div class="canvasarea">
+      <div class="script"><span class="kara">大家好，我是報告人，</span><span class="lit">今天分享</span>假訊息偵測的研究成果。</div>
+      <div class="slide">Slide 1 / 33</div>
+    </div>
+  </div>
+
+  <div class="tblwrap"><table>
+    <tr><th>位置</th><th>包含的功能</th></tr>
+    <tr><td>常駐列（9 項）</td><td>▶ 開始/暫停・📂 講稿・🖼 投影片・📍 回念稿位置・⏲ 目標時長・4 顆模組開關・⛶ 全螢幕・⚙ 設定</td></tr>
+    <tr><td><span class="chip e">✏ 編輯</span></td><td>B / I / U・螢光筆・清格式・清文字格式・插入註解・清理空白・字級 A−/pt/A+・儲存</td></tr>
+    <tr><td><span class="chip a">🖊 標註</span></td><td>游標・鉛筆・3 色點＋🎨・便利貼・橡皮擦・清除全部標註</td></tr>
+    <tr><td><span class="chip q">🎤 QA</span></td><td>載入 QA 庫・辨識語言・翻譯開關・答稿卡拉OK 開關・清空提問</td></tr>
+    <tr><td><span class="chip x">🎵 卡拉OK</span></td><td>跟讀高亮開關・對齊靈敏度・重新對齊・清漏講・回頂</td></tr>
+    <tr><td>只留選單</td><td>貼上文字・載入範例・重置計時（R 鍵仍在）・錄影・離開</td></tr>
+  </table></div>
+  <p class="note">取捨：畫面高度會隨開啟的模組增加（每模組一列）；同時開 3 個以上會佔掉三列——但演講當下通常全關，畫面反而是三案中最乾淨的。</p>
+</section>
+
+<!-- ═══════════ 方案二 ═══════════ -->
+<section id="p2">
+  <div class="plan-head">
+    <span class="plan-no mono">PLAN 02</span>
+    <h2>左側模式欄（icon rail）</h2>
+  </div>
+  <p class="plan-desc">把「你現在在做什麼」變成左緣一條窄欄：<b>演講／編輯／標註／QA 四個模式</b>，一次只在一個模式裡，頂部工具列整條換成該模式的工具。像 Photoshop／VS Code 的心智模型——<b>先選模式、工具自動對</b>。適合直屏（工具列不再擠爆寬度）。</p>
+
+  <div class="statecap"><b>狀態 A</b> — 演講模式（預設）</div>
+  <div class="mockframe">
+    <div class="titlebar"><span class="dot"></span><span class="dot"></span><span class="dot"></span>　智能語音提詞機 v1.5</div>
+    <div class="menurow"><span>檔案</span><span>編輯</span><span>檢視</span><span>工具</span><span>標註</span></div>
+    <div class="railwrap">
+      <div class="rail">
+        <span class="ric cur">🎙</span><span class="ric">✏</span><span class="ric">🖊</span><span class="ric">🎤</span>
+        <span class="rspacer"></span><span class="ric">⚙</span>
+      </div>
+      <div class="railmain">
+        <div class="tbar">
+          <span class="tb primary">▶ 開始</span>
+          <span class="tsep"></span>
+          <span class="tb">📂 講稿</span><span class="tb">🖼 投影片</span>
+          <span class="tsep"></span>
+          <span class="tb">📍 回念稿</span><span class="tb">⤴ 回頂</span><span class="tb">✖ 清漏講</span>
+          <span class="tsep"></span>
+          <span class="tspin">⏲ 15 分</span><span class="tb">🔄 重置</span>
+          <span class="tgap"></span><span class="tb">⏺ 錄影</span><span class="tb">⛶</span>
+        </div>
+        <div class="canvasarea">
+          <div class="script"><span class="lit">大家好，我是報告人，今天分享</span>假訊息偵測的研究成果。</div>
+          <div class="slide">Slide 1 / 33</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="statecap"><b>狀態 B</b> — 切到編輯模式：rail 亮黃框，整條工具列換成編輯工具</div>
+  <div class="mockframe">
+    <div class="titlebar"><span class="dot"></span><span class="dot"></span><span class="dot"></span>　智能語音提詞機 v1.5</div>
+    <div class="menurow"><span>檔案</span><span>編輯</span><span>檢視</span><span>工具</span><span>標註</span></div>
+    <div class="railwrap">
+      <div class="rail">
+        <span class="ric">🎙</span><span class="ric cur e">✏</span><span class="ric">🖊</span><span class="ric">🎤</span>
+        <span class="rspacer"></span><span class="ric">⚙</span>
+      </div>
+      <div class="railmain">
+        <div class="modrow e" style="border-top:none">
+          <span class="modtag">✏ 編輯</span>
+          <span class="tb"><b>B</b></span><span class="tb"><i>I</i></span><span class="tb"><u>U</u></span><span class="tb">🖍 螢光筆</span>
+          <span class="tsep"></span>
+          <span class="tb">✖ 清格式</span><span class="tb">💬 註解</span><span class="tb">🧹 清空白</span>
+          <span class="tsep"></span>
+          <span class="tspin">A− 36 pt A+</span>
+          <span class="tgap"></span>
+          <span class="tb">💾 儲存</span><span class="tb primary">✔ 完成編輯</span>
+        </div>
+        <div class="canvasarea">
+          <div class="script"><span class="lit">大家好，我是報告人│</span>（游標在此，直接打字）</div>
+          <div class="slide">Slide 1 / 33</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="tblwrap"><table>
+    <tr><th>模式（rail）</th><th>頂列顯示的工具</th></tr>
+    <tr><td>🎙 演講</td><td>開始/暫停・講稿・投影片・回念稿・回頂・清漏講・目標時長・重置計時・錄影・全螢幕</td></tr>
+    <tr><td><span class="chip e">✏ 編輯</span></td><td>B/I/U・螢光筆・清格式・註解・清空白・字級・儲存・「✔ 完成編輯」回演講模式</td></tr>
+    <tr><td><span class="chip a">🖊 標註</span></td><td>游標・鉛筆・色點🎨・便利貼・橡皮擦・清除全部標註</td></tr>
+    <tr><td><span class="chip q">🎤 QA</span></td><td>QA 庫・語言・翻譯・答稿卡拉OK・清空提問（右側 QA 面板同步展開）</td></tr>
+    <tr><td>rail 底部 ⚙</td><td>設定（永遠可及）</td></tr>
+  </table></div>
+  <p class="note">取捨：一次只能看到一種模式的工具（要「邊標註邊改字」得來回切）；rail 佔 52px 寬。但每個當下畫面最單純、模式感最強，新用戶最不會迷路。</p>
+</section>
+
+<!-- ═══════════ 方案三 ═══════════ -->
+<section id="p3">
+  <div class="plan-head">
+    <span class="plan-no mono">PLAN 03</span>
+    <h2>單列＋模組膠囊</h2>
+  </div>
+  <p class="plan-desc">永遠只有一條工具列。左段固定 6 個常用鈕；<b>模組啟用時，它的工具以「膠囊」形式長在同一列右段</b>（色框＋名牌把一組工具圈起來）。不佔額外高度、可同時掛多個模組，代價是同列會變擠——膠囊內只放該模組<b>最高頻的 3–5 個</b>，其餘留在選單。</p>
+
+  <div class="statecap"><b>狀態 A</b> — 預設</div>
+  <div class="mockframe">
+    <div class="titlebar"><span class="dot"></span><span class="dot"></span><span class="dot"></span>　智能語音提詞機 v1.5</div>
+    <div class="menurow"><span>檔案</span><span>編輯</span><span>檢視</span><span>工具</span><span>標註</span></div>
+    <div class="tbar">
+      <span class="tb primary">▶ 開始</span>
+      <span class="tsep"></span>
+      <span class="tb">📂</span><span class="tb">🖼</span><span class="tb">📍</span><span class="tspin">⏲ 15 分</span>
+      <span class="tgap"></span>
+      <span class="msw e"><span class="k"></span>✏</span>
+      <span class="msw a"><span class="k"></span>🖊</span>
+      <span class="msw q"><span class="k"></span>🎤</span>
+      <span class="msw x"><span class="k"></span>🎵</span>
+      <span class="tsep"></span>
+      <span class="tb">⛶</span><span class="tb">⚙</span>
+    </div>
+    <div class="canvasarea">
+      <div class="script"><span class="lit">大家好，我是報告人，今天分享</span>假訊息偵測的研究成果。</div>
+      <div class="slide">Slide 1 / 33</div>
+    </div>
+  </div>
+
+  <div class="statecap"><b>狀態 B</b> — 開了「✏ 編輯」＋「🖊 標註」：兩個膠囊長在同一列</div>
+  <div class="mockframe">
+    <div class="titlebar"><span class="dot"></span><span class="dot"></span><span class="dot"></span>　智能語音提詞機 v1.5</div>
+    <div class="menurow"><span>檔案</span><span>編輯</span><span>檢視</span><span>工具</span><span>標註</span></div>
+    <div class="tbar">
+      <span class="tb primary">▶ 開始</span>
+      <span class="tsep"></span>
+      <span class="tb">📂</span><span class="tb">🖼</span><span class="tb">📍</span><span class="tspin">⏲ 15 分</span>
+      <span class="cap e"><span class="capname">✏</span><span class="tb"><b>B</b></span><span class="tb"><i>I</i></span><span class="tb"><u>U</u></span><span class="tb">🖍</span><span class="tb">💾</span></span>
+      <span class="cap a"><span class="capname">🖊</span><span class="tb">🖊</span><span class="cdot" style="background:#ffeb3b"></span>&nbsp;<span class="cdot" style="background:#f44336"></span>&nbsp;<span class="tb">🗒</span><span class="tb">🧽</span></span>
+      <span class="tgap"></span>
+      <span class="msw e act"><span class="k"></span>✏</span>
+      <span class="msw a act"><span class="k"></span>🖊</span>
+      <span class="msw q"><span class="k"></span>🎤</span>
+      <span class="msw x"><span class="k"></span>🎵</span>
+      <span class="tsep"></span>
+      <span class="tb">⛶</span><span class="tb">⚙</span>
+    </div>
+    <div class="canvasarea">
+      <div class="script"><span class="lit">大家好│</span>（編輯＋標註同時作業）</div>
+      <div class="slide">Slide 1 / 33</div>
+    </div>
+  </div>
+
+  <div class="tblwrap"><table>
+    <tr><th>位置</th><th>包含的功能</th></tr>
+    <tr><td>固定左段（6 項）</td><td>▶ 開始・📂 講稿・🖼 投影片・📍 回念稿・⏲ 目標時長・（⛶ ⚙ 在右端）</td></tr>
+    <tr><td><span class="chip e">✏ 膠囊</span></td><td>B・I・U・螢光筆・儲存（清格式/註解/清空白/字級 → 選單「編輯」）</td></tr>
+    <tr><td><span class="chip a">🖊 膠囊</span></td><td>鉛筆・2 常用色・便利貼・橡皮擦（游標/自訂色/清除全部 → 選單「標註」）</td></tr>
+    <tr><td><span class="chip q">🎤 膠囊</span></td><td>QA 庫・語言・翻譯（其餘在 QA 面板內）</td></tr>
+    <tr><td><span class="chip x">🎵 膠囊</span></td><td>跟讀高亮・清漏講・回頂</td></tr>
+    <tr><td>只留選單</td><td>回頂・清漏講（演講時）・重置計時・錄影・貼上文字・載入範例・低頻編輯/標註項</td></tr>
+  </table></div>
+  <p class="note">取捨：同列空間有限，膠囊只能放精選項，低頻功能要進選單找；多模組同開時窄視窗會換行。優點是高度永遠一列、視線不必上下跳。</p>
+</section>
+
+<!-- ═══════════ 比較與建議 ═══════════ -->
+<section id="verdict">
+  <div class="plan-head"><span class="plan-no mono">COMPARE</span><h2>三案比較</h2></div>
+  <div class="tblwrap"><table>
+    <tr><th>面向</th><th>01 滑出列</th><th>02 左側 rail</th><th>03 膠囊</th></tr>
+    <tr><td>預設畫面乾淨度</td><td>★★★（9 項）</td><td>★★★（模式內 10 項）</td><td>★★☆（10 項含開關）</td></tr>
+    <tr><td>「功能在哪」可預期性</td><td>★★★ 開什麼出什麼</td><td>★★★ 模式即分類</td><td>★★☆ 膠囊會移動排版</td></tr>
+    <tr><td>多模組同時作業</td><td>★★★ 可疊多列</td><td>★☆☆ 一次一模式</td><td>★★★ 同列共存</td></tr>
+    <tr><td>垂直空間成本</td><td>每模組 +1 列</td><td>固定（rail 佔寬 52px）</td><td>永遠 1 列</td></tr>
+    <tr><td>與現有程式對映成本</td><td>最低（row2 容器＋顯隱 gate 已存在）</td><td>中（要新建 rail widget）</td><td>中（膠囊需自訂容器）</td></tr>
+  </table></div>
+  <div class="verdict">
+    <h3>建議：方案一（常駐極簡列＋模組滑出列）</h3>
+    <p>最符合你拍板的「模組開啟才出現對應工具列」，識別色讓「現在誰開著」零成本可辨；演講當下全關時畫面最乾淨；且既有程式已備好第二列容器與編輯模式顯隱機制，<b>實作成本三案最低、風險最小</b>。若之後直屏使用比重高，可把方案二的 rail 當第二階段疊加（rail 切模式＝一鍵開關某組模組），兩案並不互斥。</p>
+  </div>
+</section>
+
+</div>
+</body>
+</html>

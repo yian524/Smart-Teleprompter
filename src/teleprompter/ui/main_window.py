@@ -1718,9 +1718,40 @@ class MainWindow(QMainWindow):
         else:
             self._start()
 
+    def _ensure_startable_transcript(self) -> bool:
+        """按「開始」前確保 transcript 有可念句子；救得回來就救，救不回才擋。
+
+        使用者視角：「畫面上有字就應該能開始」。self.transcript 可能因為
+        編輯模式尚未離開、或補頁流程 re-parse 出 0 句而落後於畫面 —— 所以
+        檢查失敗時先用畫面文字重建，只有畫面真的沒有可念內文才彈窗。
+        """
+        def _has_sentences() -> bool:
+            return self.transcript is not None and bool(self.transcript.sentences)
+
+        # 還在編輯模式 → 一律先走完整離開流程（re-parse），讓剛打的字生效；
+        # 否則就算檢查通過，開念對齊的仍是進編輯前的舊講稿
+        if self.act_edit_mode.isChecked():
+            self.act_edit_mode.setChecked(False)
+        if _has_sentences():
+            return True
+        # 救援 2：直接用畫面文字重建
+        view_text = self.view.toPlainText()
+        if view_text.strip():
+            rebuilt = load_from_string(view_text)
+            if rebuilt.sentences:
+                self._apply_transcript(rebuilt, source_path="")
+                return _has_sentences()
+            QMessageBox.information(
+                self, "講稿沒有可念的內文",
+                "目前講稿只有標題或分頁符（# Slide N、---），沒有可以念的句子。\n"
+                "請在各頁補上講稿內文後再開始。",
+            )
+            return False
+        QMessageBox.information(self, "尚未載入講稿", "請先載入或貼上講稿。")
+        return False
+
     def _start(self) -> None:
-        if self.transcript is None or not self.transcript.sentences:
-            QMessageBox.information(self, "尚未載入講稿", "請先載入或貼上講稿。")
+        if not self._ensure_startable_transcript():
             return
 
         if not self.recognizer.is_running():
@@ -3013,10 +3044,14 @@ class MainWindow(QMainWindow):
         # 重新 parse 並套用（不動位置；位置在 _toggle_edit_mode 最後統一處理）
         from ..core.transcript_loader import load_from_string
         transcript = load_from_string(new_text)
-        if self.session_manager.active is not None:
-            self.session_manager.active.transcript = transcript
-        self.transcript = transcript
-        self.engine.set_transcript(transcript)
+        # 防呆：re-parse 出 0 句（原稿只剩標題/分頁符時會發生）就不覆寫 —
+        # 靜默把 self.transcript 換成空的，會讓畫面有字卻按不了「開始」
+        # （_apply_transcript 與 _on_transcript_edited 都有同款防護）
+        if transcript.sentences:
+            if self.session_manager.active is not None:
+                self.session_manager.active.transcript = transcript
+            self.transcript = transcript
+            self.engine.set_transcript(transcript)
         return total_slides - transcript_pages
 
     def _insert_annotation(self) -> None:
@@ -3169,7 +3204,6 @@ class MainWindow(QMainWindow):
             self.status_recognized.setText(
                 f"💾 已自動儲存 {datetime.now().strftime('%H:%M:%S')}"
             )
-        self.status_recognized.setText("✅ 已套用修改後的講稿（未儲存到原檔，可按 Ctrl+S）")
 
     def _on_font_size_spinbox(self, size: int) -> None:
         if self.view.font_size() != size:
