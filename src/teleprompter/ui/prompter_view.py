@@ -38,6 +38,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QInputDialog, QTextEdit
 
 from ..core.annotations import Annotation
+from ..core.transcript_loader import _PAGE_SEPARATOR_RE
 from .slide_mode_view import _paint_sticky_body
 
 
@@ -48,6 +49,7 @@ class PrompterView(QTextEdit):
     font_size_changed = Signal(int)
     edit_mode_changed = Signal(bool)
     text_edited = Signal(str)  # 編輯模式關閉時發出最新文本
+    pages_missing = Signal(int)  # 編輯模式下偵測到「有投影片但沒講稿區塊」的頁數
     slide_double_clicked = Signal(int)  # 雙擊右欄 slide → 發該 page_no
     annotations_changed = Signal()    # 標註有變動 → 通知 MainWindow 存檔
     tool_requested = Signal(str)      # 要求 MainWindow 切成其他 tool
@@ -682,7 +684,10 @@ class PrompterView(QTextEdit):
                 be = bs + block.length() - 1
                 if be > bs:
                     self._md_styled_ranges.append((bs, be))
-                if stripped in ("---", "===", "***"):
+                # 用與 transcript_loader 同一套分頁正則（`---+` / `===+` / `***+`）；
+                # 舊版只認剛好 3 個字元，寫 `----` 時這裡算不到、parse_transcript 卻算得到，
+                # 兩邊頁數口徑一錯開就會出現「點不進去的虛擬頁」。
+                if _PAGE_SEPARATOR_RE.match(stripped):
                     self._hr_blocks.append(block.blockNumber())
             else:
                 # 非全行 MD → 掃 inline 註解（讓 karaoke 高亮跳過）
@@ -1314,6 +1319,14 @@ class PrompterView(QTextEdit):
         last = doc.lastBlock()
         return last
 
+    def page_count_from_blocks(self) -> int:
+        """以文件內的分頁符數量回傳頁數。
+
+        這是 `_relayout_slide_gaps` 判斷「哪幾頁有真正 block」時用的同一個口徑；
+        補頁邏輯必須跟它一致，否則會補不到（或重複補）。
+        """
+        return len(self._hr_blocks) + 1 if self.document().blockCount() > 0 else 0
+
     def _relayout_slide_gaps(self) -> None:
         """以 slide 數為主建立每頁邊界（top_y, bottom_y）。
         - 有講稿頁的：取 max(文字自然高度, slide 高度)
@@ -1381,6 +1394,10 @@ class PrompterView(QTextEdit):
 
         # Phase 2：slide 數多於講稿頁 → 增加虛擬頁空間
         extra_pages = max(0, total_slides - n_transcript_covered)
+        # 虛擬頁只有空白高度、沒有 QTextBlock，游標放不進去。編輯模式下發訊號
+        # 讓 MainWindow 立刻補上區塊（例如使用者把文字整段刪掉時的保底）。
+        if extra_pages > 0 and self._edit_mode:
+            self.pages_missing.emit(extra_pages)
         if extra_pages > 0:
             end_y = self._page_boundaries[-1][1] if self._page_boundaries else 0
             total_virtual_h = 0
