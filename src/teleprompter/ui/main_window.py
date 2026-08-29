@@ -2622,9 +2622,8 @@ class MainWindow(QMainWindow):
         if self.transcript is not None and self.transcript.pages:
             # 有講稿 → 走既有路徑，順帶同步講稿位置
             self._on_slide_page_requested(page_no)
-        else:
-            if self._content_stack.currentIndex() == 1:
-                self.slide_mode_view.set_current_page(page_no - 1)
+        # 不論目前是 slide 或 split 模式都把大圖切過去：QA 時使用者要立刻看到那一頁
+        self.slide_mode_view.set_current_page(page_no - 1)
         self.slide_preview.show_page(page_no)
         self.slide_preview.scroll_to_page(page_no)
 
