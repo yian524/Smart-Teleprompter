@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import Optional
 
 from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtGui import QColor, QPainter
+from PySide6.QtGui import QColor, QPainter, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -25,7 +25,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..core.qa_library import QALibrary, QAMatch, load_qa
+from rapidfuzz import fuzz
+
+from ..core.qa_library import QALibrary, QAMatch, load_qa, normalize_query
 from ..core.translator import TranslatorController
 
 
@@ -79,6 +81,8 @@ class QAPanel(QWidget):
         self._recognized_accum = ""  # 累積目前的提問文字
         self._backup_start_page = 0  # B01 對應的實際投影片頁（0 = 不換算）
         self._last_emitted_page: int | None = None  # 避免同一題重複發翻頁訊號
+        self._answer_shown = ""        # 目前顯示中的答稿（卡拉 OK 對齊基準）
+        self._answer_progress = 0      # 已念到的字元位置
 
         self.setStyleSheet(
             "QWidget { background-color: #1E1E1E; color: #F0F0F0; }"
@@ -360,7 +364,7 @@ class QAPanel(QWidget):
                 f"🎯 匹配到：「{match.item.question}」（信心 {match.score:.0f}）"
             )
             self.match_info.setStyleSheet("color: #4CAF50;")
-            self.answer_text.setPlainText(match.item.answer)
+            self._set_answer(match.item.answer)
             self.candidates_label.setText("")
             self._maybe_goto_page(match.item.slide_page)
             return
@@ -379,7 +383,7 @@ class QAPanel(QWidget):
             )
             self.match_info.setStyleSheet("color: #FFC107;")
             if top3:
-                self.answer_text.setPlainText(top3[0].item.answer)
+                self._set_answer(top3[0].item.answer)
                 self._maybe_goto_page(top3[0].item.slide_page)
             else:
                 self.answer_text.clear()
@@ -392,6 +396,58 @@ class QAPanel(QWidget):
         else:
             self.candidates_label.setText("")
 
+    def _set_answer(self, text: str) -> None:
+        """顯示答稿並重置卡拉 OK 進度（換題時重新從頭對齊）。"""
+        if text != self._answer_shown:
+            self._answer_shown = text
+            self._answer_progress = 0
+        self.answer_text.setPlainText(text)
+        self._repaint_answer_highlight()
+
+    def advance_answer_karaoke(self, spoken: str) -> None:
+        """把剛念出的文字對到答稿上，推進高亮位置。
+
+        用「已念文字的尾段」在答稿剩餘部分做模糊定位；找不到就不動，
+        避免亂跳（同 AlignmentEngine 的保守精神，但這裡只需單段落等級）。
+        """
+        if not self.karaoke_switch.isChecked() or not self._answer_shown:
+            return
+        tail = normalize_query(spoken)[-24:]
+        if len(tail) < 4:
+            return
+        rest = self._answer_shown[self._answer_progress:]
+        if not rest:
+            return
+        window = rest[:400]
+        best_end, best_score = -1, 0.0
+        # 以字元為步進找最相似的結束點（步進 2 以控制成本）
+        for end in range(len(tail), min(len(window), 300) + 1, 2):
+            seg = normalize_query(window[max(0, end - len(tail) * 2):end])
+            if not seg:
+                continue
+            sc = float(fuzz.partial_ratio(tail, seg))
+            if sc > best_score:
+                best_score, best_end = sc, end
+        if best_score >= 72 and best_end > 0:
+            self._answer_progress = min(len(self._answer_shown),
+                                        self._answer_progress + best_end)
+            self._repaint_answer_highlight()
+
+    def _repaint_answer_highlight(self) -> None:
+        """把 0.._answer_progress 的區段標成已念（灰）。"""
+        selections = []
+        if self.karaoke_switch.isChecked() and self._answer_progress > 0:
+            sel = QTextEdit.ExtraSelection()
+            fmt = QTextCharFormat()
+            fmt.setForeground(QColor("#7A7A7A"))
+            sel.format = fmt
+            cursor = self.answer_text.textCursor()
+            cursor.setPosition(0)
+            cursor.setPosition(self._answer_progress, QTextCursor.KeepAnchor)
+            sel.cursor = cursor
+            selections.append(sel)
+        self.answer_text.setExtraSelections(selections)
+
     def _maybe_goto_page(self, page: int | None) -> None:
         """命中的題目若帶投影片頁，發出翻頁訊號（同一頁不重複發）。"""
         if not page or page <= 0 or page == self._last_emitted_page:
@@ -400,4 +456,7 @@ class QAPanel(QWidget):
         self.goto_page.emit(int(page))
 
     def _on_karaoke_toggled(self, checked: bool) -> None:
+        if not checked:
+            self._answer_progress = 0
+        self._repaint_answer_highlight()
         self.karaoke_toggled.emit(bool(checked))

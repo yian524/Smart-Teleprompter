@@ -266,3 +266,45 @@ def test_goto_page_survives_without_transcript(app, sessions_dir, qa_file, tmp_p
     app.processEvents()
     w.close()
     app.processEvents()
+
+
+def test_answer_karaoke_advances_and_resets(app, sessions_dir):
+    """開關開啟時：念過的部分推進高亮；關閉時清除；換題時歸零。"""
+    from teleprompter.ui.qa_panel import QAPanel
+
+    panel = QAPanel()
+    panel.karaoke_switch.setChecked(True)
+    answer = ("The five dimensions answer three questions. "
+              "Technique and DeceptionSignal describe how a message manipulates.")
+    panel._set_answer(answer)
+    assert panel._answer_progress == 0
+
+    panel.advance_answer_karaoke("the five dimensions answer three questions")
+    first = panel._answer_progress
+    assert 0 < first < len(answer)
+    assert len(panel.answer_text.extraSelections()) == 1
+
+    panel.advance_answer_karaoke("technique and deception signal describe how")
+    assert panel._answer_progress > first
+
+    # 換一段答稿 → 進度歸零
+    panel._set_answer("A different answer entirely.")
+    assert panel._answer_progress == 0
+
+    # 關閉開關 → 清除高亮
+    panel.karaoke_switch.setChecked(False)
+    assert panel.answer_text.extraSelections() == []
+    panel.deleteLater()
+
+
+def test_answer_karaoke_noop_when_disabled(app, sessions_dir):
+    """開關關閉時，餵文字不應改變任何狀態。"""
+    from teleprompter.ui.qa_panel import QAPanel
+
+    panel = QAPanel()
+    panel.karaoke_switch.setChecked(False)
+    panel._set_answer("Some answer text for the audience question.")
+    panel.advance_answer_karaoke("some answer text")
+    assert panel._answer_progress == 0
+    assert panel.answer_text.extraSelections() == []
+    panel.deleteLater()

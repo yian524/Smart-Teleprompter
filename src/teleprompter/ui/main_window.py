@@ -1797,6 +1797,8 @@ class MainWindow(QMainWindow):
         # Q&A 模式啟用中：文字同時路由到 Q&A 面板 + 底部狀態列（讓使用者確認有收音）
         if self.qa_panel.isVisible():
             self.qa_panel.append_recognized(delta)
+            # 卡拉 OK 開啟時，同一段辨識文字也用來推進答稿高亮
+            self.qa_panel.advance_answer_karaoke(delta)
             preview = delta.strip()
             if len(preview) > 60:
                 preview = preview[:57] + "…"
