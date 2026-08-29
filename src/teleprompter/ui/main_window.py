@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QLabel,
     QMainWindow,
+    QDialog,
     QMessageBox,
     QProgressBar,
     QProgressDialog,
@@ -53,6 +54,7 @@ from ..core.session import Session, SessionManager, default_sessions_path
 from .page_divider_overlay import PageDividerOverlay
 from .prompter_view import PrompterView
 from .qa_panel import QAPanel
+from .notes_import_dialog import NotesImportDialog
 from .record_source_dialog import RecordSourceDialog
 from .session_tab_bar import SessionTabBar
 from .settings_dialog import SettingsDialog
@@ -914,6 +916,11 @@ class MainWindow(QMainWindow):
         m_file.addAction(self.act_open_slides)
         m_file.addAction(self.act_paste)
         m_file.addSeparator()
+        act_sample = QAction("🧪 載入範例（投影片＋講稿＋Q&A）", self)
+        act_sample.setStatusTip("一鍵載入內建示範素材，用來快速試玩所有功能")
+        act_sample.triggered.connect(self.load_sample_bundle)
+        m_file.addAction(act_sample)
+        m_file.addSeparator()
         m_file.addAction(self.act_save)
         m_file.addSeparator()
         m_file.addAction(self.act_settings)
@@ -1334,6 +1341,25 @@ class MainWindow(QMainWindow):
         if path:
             self.load_slides(path)
 
+    def load_sample_bundle(self) -> None:
+        """一鍵載入內建示範素材：投影片（含備忘稿）＋ Q&A 庫。
+
+        目的是讓第一次使用（或想快速回歸測試）的人不必先自備檔案。
+        素材放在 `resources/samples/`，PyInstaller 已把整個 resources 打包進去。
+        """
+        base = Path(__file__).resolve().parent.parent / "resources" / "samples"
+        deck_file = base / "範例投影片_含講稿.pptx"
+        qa_file = base / "範例QA問答庫.md"
+        if not deck_file.exists():
+            QMessageBox.warning(self, "找不到範例",
+                                f"範例素材不存在：" + str(deck_file))
+            return
+        # 先清掉現有講稿，讓抽取流程會被觸發
+        self._apply_transcript(load_from_string(""), source_path="")
+        self.load_slides(deck_file)
+        if qa_file.exists():
+            self.qa_panel.load_qa_file(str(qa_file))
+
     def load_slides(self, path: str | Path) -> None:
         """載入投影片檔（PDF/PPTX → 轉 PDF → 渲染），掛到 active session。"""
         session = self._ensure_active_session()
@@ -1370,9 +1396,11 @@ class MainWindow(QMainWindow):
         session.slides_path = str(p)
         self.slide_deck = deck
         session.slide_deck = deck
-        # 若目前尚無講稿 → 依投影片頁數產生預設 scaffold（每頁一個「# Slide N」+ placeholder）
+        # 若目前尚無講稿 → 先試著從原始檔抽 speaker notes，讓使用者預覽/編輯後載入；
+        # 抽不到或使用者略過 → 退回 scaffold（每頁一個「# Slide N」+ placeholder）
         if self.transcript is None or not self.transcript.full_text.strip():
-            self._create_default_transcript_from_slides(deck.page_count)
+            if not self._offer_extracted_notes(p, deck):
+                self._create_default_transcript_from_slides(deck.page_count)
         # 嵌入到 PrompterView（左文右圖）
         self.view.set_slide_deck(deck)
         self._sync_slide_to_current_sentence()
@@ -2891,6 +2919,37 @@ class MainWindow(QMainWindow):
             if pre_mode is not None and pre_mode != self._view_mode:
                 self._set_view_mode(pre_mode)
             self._pre_edit_view_mode = None
+
+    def _offer_extracted_notes(self, source_path, deck) -> bool:
+        """從投影片原始檔抽 speaker notes → 預覽/編輯視窗 → 載入為講稿。
+
+        回傳 True 表示已載入講稿（呼叫端就不用再產 scaffold）。
+        任何一步失敗都靜默回 False，維持原本的 scaffold 流程。
+        """
+        try:
+            from ..core.notes_extractor import extract_notes
+            notes = extract_notes(source_path)
+        except Exception:
+            return False
+        if notes.page_count == 0 or notes.filled_count == 0:
+            return False
+        # 頁數對不上（例如 PPTX 有隱藏頁）→ 以 deck 為準補齊／截斷，避免錯位
+        if notes.page_count != deck.page_count:
+            notes.pages = (notes.pages + [""] * deck.page_count)[:deck.page_count]
+            notes.titles = (notes.titles + [""] * deck.page_count)[:deck.page_count]
+
+        dialog = NotesImportDialog(notes, deck=deck, parent=self)
+        if dialog.exec() != QDialog.Accepted:
+            return False
+        text = dialog.transcript_text()
+        if not text.strip():
+            return False
+        from ..core.transcript_loader import load_from_string
+        self._apply_transcript(load_from_string(text), source_path="")
+        self.status_recognized.setText(
+            f"✅ 已從投影片載入講稿（{notes.filled_count}/{notes.page_count} 頁）"
+        )
+        return True
 
     def _create_default_transcript_from_slides(self, n_pages: int) -> None:
         """投影片已載入但講稿為空 → 產生 n_pages 頁的 scaffold 讓使用者直接編輯。
