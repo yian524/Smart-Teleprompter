@@ -62,6 +62,8 @@ class AppConfig:
     qa_panel_geometry: str = ""
     floating_timer_x: int = -1
     floating_timer_y: int = -1
+    floating_timer_w: int = 0
+    floating_timer_h: int = 0
 
 
 _MIGRATION_KEY = "_migration_streaming_v1"
