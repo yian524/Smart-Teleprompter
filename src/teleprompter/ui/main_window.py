@@ -361,6 +361,11 @@ class MainWindow(QMainWindow):
         self.qa_panel = QAPanel()
         self.qa_panel.close_qa_mode.connect(self._exit_qa_mode)
         self.qa_panel.language_changed.connect(self._switch_recognizer_language)
+        self.qa_panel.goto_page.connect(self._on_qa_goto_page)
+        self.qa_panel.karaoke_toggled.connect(self._on_qa_karaoke_toggled)
+        self.qa_panel.qa_path_changed.connect(self._on_qa_path_changed)
+        self.qa_panel.set_backup_start_page(self.cfg.qa_backup_start_page)
+        self.qa_panel.karaoke_switch.setChecked(self.cfg.qa_karaoke_enabled)
         # 降低最小寬度：原本太寬會吃掉講稿區；280px 夠顯示問答欄 + 語言 combo
         self.qa_panel.setMinimumWidth(280)
         self.main_splitter.addWidget(self.qa_panel)
@@ -1140,9 +1145,16 @@ class MainWindow(QMainWindow):
         # 還原檢視模式（放最後，因為 _set_view_mode 會根據 session.slide_deck 決定縮圖列內容）
         self._set_view_mode(session.view_mode or "split")
 
+    def _restore_last_qa_library(self) -> None:
+        """啟動時還原上次載入的 Q&A 庫（檔案不在就靜默略過）。"""
+        path = (self.cfg.last_qa_path or "").strip()
+        if path and Path(path).exists():
+            self.qa_panel.load_qa_file(path)
+
     def _restore_sessions_or_bootstrap(self) -> None:
         """啟動時嘗試從 sessions.json 還原；否則 bootstrap 一個空 session，
         再嘗試 legacy `last_transcript_path` 還原。"""
+        self._restore_last_qa_library()
         sessions_path = default_sessions_path()
         self.session_manager.load_from_disk(sessions_path)
         if len(self.session_manager) > 0:
@@ -2594,6 +2606,37 @@ class MainWindow(QMainWindow):
             self.qa_panel.isVisible() and getattr(self.cfg, "qa_use_system_audio", True)
         )
         self.audio.start(device=device_arg, loopback=use_loopback)
+
+    def _on_qa_goto_page(self, page_no: int) -> None:
+        """Q&A 命中帶頁碼的題目 → 翻到該投影片頁。
+
+        與 `_on_slide_page_requested` 的差別：QA 模式常常只開投影片、沒有講稿，
+        所以這裡不要求 transcript 存在，只要 deck 有那一頁就翻。
+        """
+        deck = getattr(self, "slide_deck", None)
+        total = deck.page_count if deck is not None else 0
+        if total <= 0 or page_no < 1 or page_no > total:
+            return
+        if self.transcript is not None and self.transcript.pages:
+            # 有講稿 → 走既有路徑，順帶同步講稿位置
+            self._on_slide_page_requested(page_no)
+        else:
+            if self._content_stack.currentIndex() == 1:
+                self.slide_mode_view.set_current_page(page_no - 1)
+        self.slide_preview.show_page(page_no)
+        self.slide_preview.scroll_to_page(page_no)
+
+    def _on_qa_karaoke_toggled(self, enabled: bool) -> None:
+        """記住答稿卡拉 OK 開關狀態。"""
+        self.cfg = dataclass_replace(self.cfg, qa_karaoke_enabled=bool(enabled))
+        save_config(self.cfg)
+
+    def _on_qa_path_changed(self, path: str) -> None:
+        """記住最後載入的 Q&A 庫路徑，下次啟動自動還原。"""
+        if not path:
+            return
+        self.cfg = dataclass_replace(self.cfg, last_qa_path=path)
+        save_config(self.cfg)
 
     def _exit_qa_mode(self) -> None:
         self.qa_panel.hide()

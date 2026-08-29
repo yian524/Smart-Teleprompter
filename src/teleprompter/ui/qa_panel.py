@@ -11,7 +11,8 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -28,17 +29,56 @@ from ..core.qa_library import QALibrary, QAMatch, load_qa
 from ..core.translator import TranslatorController
 
 
+class ToggleSwitch(QCheckBox):
+    """手機式滑動開關：pill 底 + 圓形滑塊，勾選時滑塊移到右側並轉綠。
+
+    繼承 QCheckBox 以沿用既有的 toggled/isChecked/setChecked API，
+    只覆寫繪製與尺寸；文字仍由外部 QLabel 提供，避免與滑塊重疊。
+    """
+
+    _W, _H, _PAD = 46, 24, 3
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFixedSize(self._W, self._H)
+
+    def sizeHint(self):  # noqa: D102
+        return QSize(self._W, self._H)
+
+    def paintEvent(self, event) -> None:  # noqa: D102, ARG002
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        on = self.isChecked()
+        track = QColor("#2E9E5B") if on else QColor("#4A4A4A")
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(track)
+        painter.drawRoundedRect(0, 0, self._W, self._H, self._H / 2, self._H / 2)
+        d = self._H - self._PAD * 2
+        x = self._W - d - self._PAD if on else self._PAD
+        painter.setBrush(QColor("#FFFFFF"))
+        painter.drawEllipse(x, self._PAD, d, d)
+
+
 class QAPanel(QWidget):
     """Q&A 模式主面板。"""
 
     qa_loaded = Signal(int)
     close_qa_mode = Signal()
     language_changed = Signal(str)   # 'zh' / 'en' / 'auto'
+    goto_page = Signal(int)          # 命中的題目帶投影片頁碼 → 主視窗翻頁（1-based）
+    karaoke_toggled = Signal(bool)   # 答稿卡拉 OK 開關
+    qa_path_changed = Signal(str)    # 成功載入的 QA 庫路徑 → 主視窗寫回設定
+
+    # 低於此分數視為「沒有合適答案」，不顯示答案正文（避免照唸到錯內容）
+    NO_MATCH_SCORE = 50.0
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.library = QALibrary()
         self._recognized_accum = ""  # 累積目前的提問文字
+        self._backup_start_page = 0  # B01 對應的實際投影片頁（0 = 不換算）
+        self._last_emitted_page: int | None = None  # 避免同一題重複發翻頁訊號
 
         self.setStyleSheet(
             "QWidget { background-color: #1E1E1E; color: #F0F0F0; }"
@@ -85,6 +125,15 @@ class QAPanel(QWidget):
         self.translate_check.setStyleSheet("color: #80D8FF;")
         self.translate_check.toggled.connect(self._on_translate_toggled)
         toolbar.addWidget(self.translate_check)
+
+        # 答稿卡拉 OK：手機式滑動開關（QCheckBox + indicator 造型）
+        karaoke_label = QLabel("🎤 答稿卡拉 OK")
+        karaoke_label.setStyleSheet("color: #80D8FF;")
+        toolbar.addWidget(karaoke_label)
+        self.karaoke_switch = ToggleSwitch()
+        self.karaoke_switch.setToolTip("開啟後，念答稿時會逐字高亮（與講稿模式相同）")
+        self.karaoke_switch.toggled.connect(self._on_karaoke_toggled)
+        toolbar.addWidget(self.karaoke_switch)
 
         self.close_btn = QPushButton("✖ 結束 Q&A")
         self.close_btn.clicked.connect(self.close_qa_mode)
@@ -163,17 +212,25 @@ class QAPanel(QWidget):
         if path:
             self.load_qa_file(path)
 
+    def set_backup_start_page(self, page: int) -> None:
+        """設定 Q&A 庫裡 B01 對應的實際投影片頁（0 = 不換算備答編號）。"""
+        self._backup_start_page = max(0, int(page or 0))
+
     def load_qa_file(self, path: str) -> None:
         try:
-            self.library = load_qa(path)
+            self.library = load_qa(path, self._backup_start_page)
         except Exception as e:
             self.status_label.setText(f"載入失敗: {e}")
             self.status_label.setStyleSheet("color: #F44336;")
             return
         count = len(self.library)
-        self.status_label.setText(f"✅ 已載入 {count} 組 Q&A")
+        paged = sum(1 for it in self.library.items if it.slide_page)
+        extra = f"（{paged} 題可自動翻頁）" if paged else ""
+        self.status_label.setText(f"✅ 已載入 {count} 組 Q&A{extra}")
         self.status_label.setStyleSheet("color: #4CAF50;")
+        self._last_emitted_page = None
         self.qa_loaded.emit(count)
+        self.qa_path_changed.emit(path)
 
     def _on_clear_clicked(self) -> None:
         self.clear_question()
@@ -236,6 +293,7 @@ class QAPanel(QWidget):
 
     def clear_question(self) -> None:
         """清空累積的提問（新一輪 Q&A 時用）。"""
+        self._last_emitted_page = None
         self._recognized_accum = ""
         self.question_text.clear()
         self.answer_text.clear()
@@ -286,26 +344,49 @@ class QAPanel(QWidget):
             self.answer_text.clear()
             self.match_info.setText("")
             return
-        # 信心提示
         if match.is_confident:
             self.match_info.setText(
                 f"🎯 匹配到：「{match.item.question}」（信心 {match.score:.0f}）"
             )
             self.match_info.setStyleSheet("color: #4CAF50;")
             self.answer_text.setPlainText(match.item.answer)
+            self.candidates_label.setText("")
+            self._maybe_goto_page(match.item.slide_page)
+            return
+
+        top3 = self.library.top_k(self._recognized_accum, k=3)
+        if match.score < self.NO_MATCH_SCORE:
+            # 全都不像 → 不硬塞答案，避免照唸到錯的內容
+            self.match_info.setText(
+                f"❔ 未匹配到合適答案（最高信心僅 {match.score:.0f}），請自由回答"
+            )
+            self.match_info.setStyleSheet("color: #F44336;")
+            self.answer_text.clear()
         else:
-            # 顯示 top 3 讓使用者判斷
-            top3 = self.library.top_k(self._recognized_accum, k=3)
             self.match_info.setText(
                 f"🤔 有多個可能答案（最高信心 {match.score:.0f}），請參考下方候選："
             )
             self.match_info.setStyleSheet("color: #FFC107;")
             if top3:
                 self.answer_text.setPlainText(top3[0].item.answer)
-                candidates_lines = [
-                    f"  {i + 2}. Q: {m.item.question}"
-                    for i, m in enumerate(top3[1:])
-                ]
-                self.candidates_label.setText("其他可能:\n" + "\n".join(candidates_lines))
+                self._maybe_goto_page(top3[0].item.slide_page)
             else:
                 self.answer_text.clear()
+        if top3:
+            self.candidates_label.setText(
+                "其他可能:" + chr(10)
+                + chr(10).join(f"  {i + 2}. Q: {m.item.question}"
+                               for i, m in enumerate(top3[1:]))
+            )
+        else:
+            self.candidates_label.setText("")
+
+    def _maybe_goto_page(self, page: int | None) -> None:
+        """命中的題目若帶投影片頁，發出翻頁訊號（同一頁不重複發）。"""
+        if not page or page <= 0 or page == self._last_emitted_page:
+            return
+        self._last_emitted_page = page
+        self.goto_page.emit(int(page))
+
+    def _on_karaoke_toggled(self, checked: bool) -> None:
+        self.karaoke_toggled.emit(bool(checked))
