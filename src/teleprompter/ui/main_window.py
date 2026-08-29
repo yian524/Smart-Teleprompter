@@ -253,7 +253,9 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.cfg = config
 
-        self.setWindowTitle("智能語音提詞機")
+        from .. import __version__
+        self._app_title = f"智能語音提詞機 v{__version__}"
+        self.setWindowTitle(self._app_title)
         # 套 app icon（若 main.py 沒設也能 fallback）
         try:
             from ..main import make_app_icon
@@ -1132,14 +1134,14 @@ class MainWindow(QMainWindow):
             else:
                 self.view.set_position(session.transcript.sentences[0].start, animate=False)
             self.recognizer.update_prompt(session.transcript.full_text[:200])
-            self.setWindowTitle(f"智能語音提詞機 — {session.title}")
+            self.setWindowTitle(f"{self._app_title} — {session.title}")
             page_info = f"，{len(session.transcript.pages)} 頁" if session.transcript.pages else ""
             self.status_recognized.setText(
                 f"{session.title} · {len(session.transcript.sentences)} 句{page_info}"
             )
         else:
             self.view.set_text("")
-            self.setWindowTitle(f"智能語音提詞機 — {session.title}")
+            self.setWindowTitle(f"{self._app_title} — {session.title}")
             self.status_recognized.setText("請載入講稿（📂 開啟講稿）")
 
         # 嵌入式投影片 → 直接餵給 PrompterView
