@@ -162,12 +162,12 @@ def test_module_bars_carry_their_tools(win):
 def test_main_toolbar_keeps_only_presenting_essentials(win):
     """常駐列只留演講當下要按的；已模組化的項目不得再佔位。"""
     acts = [a for a in win._main_toolbar.actions() if not a.isSeparator()]
-    for attr in ("act_open", "act_open_slides", "act_start",
-                 "act_goto_speech", "act_fullscreen", "act_settings"):
+    for attr in ("act_start", "act_goto_speech", "act_fullscreen", "act_settings"):
         assert getattr(win, attr) in acts, f"{attr} 應留在常駐列"
-    for attr in ("act_record", "act_reset_timer", "act_bold", "act_save",
-                 "act_font_bigger", "act_clear_skipped"):
-        assert getattr(win, attr) not in acts, f"{attr} 應已移入模組列"
+    # 載入類與模組類都不該佔用常駐列（v1.7 起載入只在檔案選單／引導頁／拖放）
+    for attr in ("act_open", "act_open_slides", "act_record", "act_reset_timer",
+                 "act_bold", "act_save", "act_font_bigger", "act_clear_skipped"):
+        assert getattr(win, attr) not in acts, f"{attr} 不該在常駐列"
 
 
 def test_color_swatches_live_in_annotation_module(win):

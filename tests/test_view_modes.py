@@ -457,23 +457,23 @@ def test_main_toolbar_compacts_in_portrait_to_single_row(main_window):
     tb2 = main_window._main_toolbar_row2
     assert not tb2.isVisible()
     tb1_acts = [a for a in tb1.actions() if not a.isSeparator()]
-    assert main_window.act_open in tb1_acts
     assert main_window.act_start in tb1_acts
     assert main_window.act_settings in tb1_acts
-    # 已移入模組工具列的項目不該再佔用常駐列
+    # 已移入模組工具列／檔案選單的項目不該再佔用常駐列
     assert main_window.act_record not in tb1_acts
+    assert main_window.act_open not in tb1_acts
     assert main_window.act_record in main_window.module_bars["follow"].actions()
 
     main_window.resize(1080, 1920)
     main_window._apply_orientation_layout()
     assert not tb2.isVisible()
     tb1_acts = [a for a in tb1.actions() if not a.isSeparator()]
-    assert main_window.act_open in tb1_acts
+    assert main_window.act_start in tb1_acts
     assert main_window.act_settings in tb1_acts
 
     main_window.resize(1920, 1080)
     main_window._apply_orientation_layout()
-    assert main_window.act_open in [a for a in tb1.actions() if not a.isSeparator()]
+    assert main_window.act_start in [a for a in tb1.actions() if not a.isSeparator()]
 
 
 def test_main_window_adapts_mic_width_on_portrait(main_window):
