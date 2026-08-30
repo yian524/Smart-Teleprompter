@@ -82,6 +82,9 @@ class ModuleToggle(QWidget):
     # ---- 代理 ----
     def setChecked(self, on: bool) -> None:  # noqa: N802
         self.switch.setChecked(on)
+        # 標籤顏色平常靠 toggled 訊號更新；外部同步時會 blockSignals，
+        # 那條路徑就收不到通知 → 這裡直接刷一次，避免滑塊亮了字還是灰的
+        self._sync_label()
 
     def isChecked(self) -> bool:  # noqa: N802
         return self.switch.isChecked()

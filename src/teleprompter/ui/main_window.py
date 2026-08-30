@@ -3088,6 +3088,7 @@ class MainWindow(QMainWindow):
         self.qa_panel.show()
         self.act_qa_mode.setChecked(True)
         self.act_qa_mode.setText("Q&A 模式")
+        self.sync_module_toggle("qa", True)
         # 自動勾選「翻譯中文」：觀眾可能用英文提問，翻譯即時給中文
         if hasattr(self.qa_panel, "translate_check") and not self.qa_panel.translate_check.isChecked():
             self.qa_panel.translate_check.setChecked(True)
@@ -3191,6 +3192,7 @@ class MainWindow(QMainWindow):
         self.qa_panel.hide()
         self.act_qa_mode.setChecked(False)
         self.act_qa_mode.setText("Q&A 模式")
+        self.sync_module_toggle("qa", False)
         # 切回預設語言
         self._switch_recognizer_language(self.cfg.language)
         # 切回麥克風輸入（離開 QA → 報告繼續）
@@ -3608,6 +3610,9 @@ class MainWindow(QMainWindow):
             self.act_edit_mode.blockSignals(True)
             self.act_edit_mode.setChecked(enabled)
             self.act_edit_mode.blockSignals(False)
+        # 工具列上的模組開關也要跟著亮：使用者可能是從點擊講稿的「編輯或跳轉」
+        # 對話框、Ctrl+E 或選單進來的，那些路徑不會經過模組開關本身
+        self.sync_module_toggle("edit", enabled)
         # 直屏時 row 2 的可見性取決於這些 secondary 是否可見 → 編輯模式切換時要重 layout
         if hasattr(self, "annotation_toolbar_row2"):
             is_portrait = self.width() < self.height()
