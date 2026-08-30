@@ -126,41 +126,43 @@ def test_floating_timer_closes_with_main_window(win, app):
 # ============================================================
 
 def test_qa_panel_starts_docked(win):
-    assert not win.qa_panel.isWindow()
+    """dock 化後浮動的是 QDockWidget，面板本身是它的內容物。"""
+    assert not win.dock_qa.isFloating()
 
 
 def test_qa_panel_detaches_and_redocks(win, app):
     win.act_qa_floating.setChecked(True)
     app.processEvents()
-    assert win.qa_panel.isWindow(), "應成為獨立視窗"
-    assert win.qa_panel.windowTitle() == "Q&A 助手"
+    assert win.dock_qa.isFloating(), "應成為浮動視窗"
 
     win.act_qa_floating.setChecked(False)
     app.processEvents()
-    assert not win.qa_panel.isWindow(), "應收回主視窗"
-    assert win.qa_panel.parent() is not None
+    assert not win.dock_qa.isFloating(), "應收回主視窗"
+    # 收回時由 Qt 記住原本停在哪一側（舊實作永遠塞到最右）
+    from PySide6.QtCore import Qt as _Qt
+    assert win.dockWidgetArea(win.dock_qa) != _Qt.DockWidgetArea.NoDockWidgetArea
 
 
 def test_qa_panel_keeps_visibility_across_detach(win, app):
     """切換停靠方式不該讓正在使用的面板消失。"""
-    win.qa_panel.show()
+    win.dock_qa.show()
     app.processEvents()
 
     win.act_qa_floating.setChecked(True)
     app.processEvents()
-    assert win.qa_panel.isVisible()
+    assert win.dock_qa.isVisible()
 
     win.act_qa_floating.setChecked(False)
     app.processEvents()
-    assert win.qa_panel.isVisible()
+    assert win.dock_qa.isVisible()
 
 
 def test_hidden_qa_panel_stays_hidden_when_detached(win, app):
     """沒在用 Q&A 時分離，不該平白冒出一個視窗。"""
-    assert not win.qa_panel.isVisible()
+    assert not win.dock_qa.isVisible()
     win.act_qa_floating.setChecked(True)
     app.processEvents()
-    assert not win.qa_panel.isVisible()
+    assert not win.dock_qa.isVisible()
 
 
 # ============================================================

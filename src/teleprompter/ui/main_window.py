@@ -7,7 +7,7 @@ import time
 from dataclasses import replace as dataclass_replace
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QByteArray, Qt, QTimer
 from PySide6.QtGui import (
     QAction,
     QGuiApplication,
@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QInputDialog,
     QLabel,
+    QDockWidget,
     QMainWindow,
     QDialog,
     QMessageBox,
@@ -58,7 +59,6 @@ from ..core.recognition_service import (
     RecognitionService,
 )
 from ..core.session import Session, SessionManager, default_sessions_path
-from .page_divider_overlay import PageDividerOverlay
 from .prompter_view import PrompterView
 from .qa_panel import QAPanel
 from .empty_state import EmptyStateOverlay
@@ -339,22 +339,10 @@ class MainWindow(QMainWindow):
         central_layout.addWidget(self.session_tab_bar)
 
         # 時間/投影片資訊頂部 bar
-        self.time_panel = TimePanel(central_wrap)
-        central_layout.addWidget(self.time_panel)
+        # 時間列改由 dock 承載（見 _build_docks），這裡只建立
+        self.time_panel = TimePanel()
 
-        # 巢狀 splitter：外=[內層 + Q&A]，內=[縮圖列(左) + 主內容區(中)]
-        self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
-        self.content_splitter = QSplitter(Qt.Orientation.Horizontal)
-
-        # 左側縮圖列（只在投影片模式顯示）— 重用 SlidePreviewPanel
-        self.slide_preview = SlidePreviewPanel()
-        self.slide_preview.hide()
-        # 寬度硬 cap：縮圖列不能吃掉主內容區（拖曳 splitter 也不行）
-        self.slide_preview.setMinimumWidth(160)
-        self.slide_preview.setMaximumWidth(420)
-        self.content_splitter.addWidget(self.slide_preview)
-
-        # 中間：QStackedWidget 裝兩種顯示方式
+        # 主內容區：QStackedWidget 裝兩種顯示方式（兩者互斥，不可同時顯示）
         #   index 0 = PrompterView（滾動式：講稿 / 分割模式）
         #   index 1 = SlideModeView（單頁式：投影片模式）
         self._content_stack = QStackedWidget()
@@ -371,12 +359,14 @@ class MainWindow(QMainWindow):
         )
         self._content_stack.addWidget(self.slide_mode_view)
         self._content_stack.setCurrentIndex(0)  # 預設顯示 PrompterView
-        self.content_splitter.addWidget(self._content_stack)
+        central_layout.addWidget(self._content_stack, 1)
 
-        self.content_splitter.setStretchFactor(0, 0)  # 縮圖列固定寬度
-        self.content_splitter.setStretchFactor(1, 1)  # 主內容區拉伸
+        # 周邊面板（縮圖列 / Q&A）改由 QDockWidget 承載：可拖到上下左右、
+        # 可拉成浮動視窗、可從「檢視」選單勾選顯隱，位置會被記住。
+        self.slide_preview = SlidePreviewPanel()
+        self.slide_preview.setMinimumWidth(160)
+        self.slide_preview.setMaximumWidth(420)
 
-        self.main_splitter.addWidget(self.content_splitter)
         self.qa_panel = QAPanel()
         self.qa_panel.close_qa_mode.connect(self._exit_qa_mode)
         # Q&A 換辨識語言 → 更新它登記的需求（仲裁層只在真的不同時才重載模型）
@@ -390,15 +380,15 @@ class MainWindow(QMainWindow):
         self.qa_panel.set_backup_start_page(self.cfg.qa_backup_start_page)
         self.qa_panel.karaoke_switch.setChecked(self.cfg.qa_karaoke_enabled)
         self._restore_last_qa_library()
-        # 降低最小寬度：原本太寬會吃掉講稿區；280px 夠顯示問答欄 + 語言 combo
         self.qa_panel.setMinimumWidth(280)
-        self.main_splitter.addWidget(self.qa_panel)
-        self.main_splitter.setStretchFactor(0, 4)   # 提詞區再放寬一點
-        self.main_splitter.setStretchFactor(1, 1)   # QA 面板較窄
-        self.qa_panel.hide()                          # 預設不顯示，按 Q&A 模式才展開
-        central_layout.addWidget(self.main_splitter, 1)
 
         self.setCentralWidget(central_wrap)
+        self._build_docks()
+        if self.cfg.dock_state:
+            try:
+                self.restoreState(QByteArray(self.cfg.dock_state))
+            except Exception as e:      # 版面格式變更等 → 用預設佈局就好
+                logger.warning("還原面板佈局失敗，改用預設: %s", e)
 
         # 允許拖拉檔案到主視窗（不需經由檔案對話框）
         self.setAcceptDrops(True)
@@ -546,10 +536,6 @@ class MainWindow(QMainWindow):
         )
 
         # 對齊重算 debounce timer
-        self._align_timer = QTimer(self)
-        self._align_timer.setSingleShot(True)
-        self._align_timer.setInterval(120)
-        self._align_timer.timeout.connect(self._align_page_heights)
 
         # 軟推進追蹤（改用 hypothesis 訊號當語音指標，避免被噪音誤觸發）
         self._last_hypothesis_time: float = 0.0
@@ -598,6 +584,44 @@ class MainWindow(QMainWindow):
         self._autosave_periodic.start()
 
     # ---------- 介面建立 ----------
+
+    def _build_docks(self) -> None:
+        """把周邊面板包成可停靠視窗。
+
+        每個 QDockWidget 自帶 `toggleViewAction()`，掛進「檢視」選單就是
+        勾選顯隱；面板本身可拖到上下左右、拉成浮動視窗，位置由
+        `saveState()` 記住。objectName 是 saveState 還原的依據，不可省略。
+        """
+        self.setDockNestingEnabled(True)
+
+        self.dock_slides = QDockWidget("投影片縮圖", self)
+        self.dock_slides.setObjectName("dockSlides")
+        self.dock_slides.setWidget(self.slide_preview)
+        self.dock_slides.setAllowedAreas(
+            Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
+        )
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.dock_slides)
+        self.dock_slides.hide()
+
+        self.dock_qa = QDockWidget("Q&A 助手", self)
+        self.dock_qa.setObjectName("dockQA")
+        self.dock_qa.setWidget(self.qa_panel)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.dock_qa)
+        self.dock_qa.hide()
+
+        self.dock_time = QDockWidget("時間與進度", self)
+        self.dock_time.setObjectName("dockTime")
+        self.dock_time.setWidget(self.time_panel)
+        self.dock_time.setAllowedAreas(
+            Qt.DockWidgetArea.TopDockWidgetArea | Qt.DockWidgetArea.BottomDockWidgetArea
+        )
+        self.addDockWidget(Qt.DockWidgetArea.TopDockWidgetArea, self.dock_time)
+
+        self.panel_docks = {
+            "slides": self.dock_slides,
+            "qa": self.dock_qa,
+            "time": self.dock_time,
+        }
 
     def _build_toolbar(self) -> None:
         tb = QToolBar("主工具列")
@@ -1085,7 +1109,7 @@ class MainWindow(QMainWindow):
         elif key == "qa":
             # _toggle_qa_mode 沒有參數、依面板現況切換 → 只在狀態不符時呼叫一次
             self.act_qa_mode.setChecked(on)
-            if self.qa_panel.isVisible() != on:
+            if self.dock_qa.isVisible() != on:
                 self._toggle_qa_mode()
         elif key == "follow":
             # 跟讀＝要不要用語音自動對齊。這顆開關以前是死碼（呼叫一個不存在
@@ -1112,7 +1136,7 @@ class MainWindow(QMainWindow):
             bar.setVisible(on)
 
     def _exit_qa_mode(self) -> None:
-        self.qa_panel.hide()
+        self.dock_qa.hide()
         self.act_qa_mode.setChecked(False)
         self.act_qa_mode.setText("Q&A 模式")
         self.sync_module_toggle("qa", False)
@@ -1153,40 +1177,15 @@ class MainWindow(QMainWindow):
         save_config(self.cfg)
 
     def _toggle_qa_floating(self, on: bool) -> None:
-        """Q&A 面板：獨立視窗 ↔ 收回主視窗右側。
+        """Q&A 面板：獨立視窗 ↔ 停靠回主視窗。
 
-        獨立視窗時可以擺到第二螢幕或疊在簡報軟體旁邊，講稿區就不必再讓出寬度。
+        改用 QDockWidget 的 floating（以前是自己 setParent(None)＋setWindowFlags，
+        收回時只能塞到最右邊、也記不住原本停在哪一側）。
         """
-        panel = self.qa_panel
-        was_visible = panel.isVisible()
-        if on:
-            self.main_splitter.setSizes(self.main_splitter.sizes())  # 記住目前比例
-            panel.setParent(None)
-            panel.setWindowFlags(
-                Qt.WindowType.Window | Qt.WindowType.WindowStaysOnTopHint
-            )
-            panel.setWindowTitle("Q&A 助手")
-            geo = self.cfg.qa_panel_geometry
-            if geo:
-                try:
-                    x, y, w, h = (int(v) for v in geo.split(","))
-                    panel.setGeometry(x, y, w, h)
-                except ValueError:
-                    panel.resize(460, 720)
-            else:
-                panel.resize(460, 720)
-            if was_visible:
-                panel.show()
-        else:
-            if panel.isVisible():
-                g = panel.geometry()
-                self.cfg = dataclass_replace(
-                    self.cfg,
-                    qa_panel_geometry=f"{g.x()},{g.y()},{g.width()},{g.height()}",
-                )
-            panel.setWindowFlags(Qt.WindowType.Widget)
-            self.main_splitter.addWidget(panel)
-            panel.setVisible(was_visible)
+        dock = getattr(self, "dock_qa", None)
+        if dock is None:
+            return
+        dock.setFloating(bool(on))
         self.cfg = dataclass_replace(self.cfg, qa_panel_floating=bool(on))
         save_config(self.cfg)
 
@@ -1298,6 +1297,11 @@ class MainWindow(QMainWindow):
             "把 Q&A 面板拉成獨立視窗，講稿區不必讓出寬度"
         )
         self.act_qa_floating.toggled.connect(self._toggle_qa_floating)
+        # 面板顯隱：QDockWidget 自帶的 toggleViewAction，勾選即顯示
+        m_view.addSeparator()
+        for dock in (self.dock_time, self.dock_slides, self.dock_qa):
+            m_view.addAction(dock.toggleViewAction())
+        m_view.addSeparator()
         m_view.addAction(self.act_qa_floating)
 
         m_view.addAction(self.act_floating_timer)
@@ -1442,9 +1446,8 @@ class MainWindow(QMainWindow):
             session.format_spans = []
         # 檢視模式 + 縮圖列寬度
         session.view_mode = getattr(self, "_view_mode", "split")
-        sizes = self.content_splitter.sizes()
-        if self.slide_preview.isVisible() and len(sizes) >= 2 and sizes[0] > 0:
-            session.thumbnail_panel_width = sizes[0]
+        if self.dock_slides.isVisible():
+            session.thumbnail_panel_width = self.slide_preview.width()
 
     def _has_any_content(self) -> bool:
         """這個分頁有沒有東西可以念／看。"""
@@ -1899,36 +1902,6 @@ class MainWindow(QMainWindow):
 
     # ---------- 統一捲動（scroll lock） ----------
 
-    def _on_left_scroll(self, value: int) -> None:
-        """左側捲動 → 同步右側 scrollbar value（1:1）。"""
-        if self._scroll_lock_guard:
-            return
-        self._scroll_lock_guard = True
-        try:
-            right_sb = self.slide_preview.scroll_area().verticalScrollBar()
-            right_sb.setValue(value)
-        finally:
-            self._scroll_lock_guard = False
-        self._update_divider_overlay()
-
-    def _on_right_scroll(self, value: int) -> None:
-        """右側捲動 → 同步左側 scrollbar value。"""
-        if self._scroll_lock_guard:
-            return
-        self._scroll_lock_guard = True
-        try:
-            self.view.verticalScrollBar().setValue(value)
-        finally:
-            self._scroll_lock_guard = False
-        self._update_divider_overlay()
-
-    def _on_slide_page_scrolled(self, page_no: int) -> None:
-        """右側 slide 面板呼叫的 page_changed signal（目前僅用於狀態顯示）。"""
-        # 新版統一捲動後不需做跨側同步，保留空方法避免 connect 失敗
-        pass
-
-    # ---------- 頁高對齊（pad-to-align） ----------
-
     def _compute_page_left_blocks(self) -> list[int]:
         """找出每頁最後一個 block 的 block number（對應 `---` 分隔行；若該頁不是最後一頁則有 `---`）。
         最後一頁沒有 `---`，回傳其最後一個 block。
@@ -1953,94 +1926,6 @@ class MainWindow(QMainWindow):
             # 最後一頁 → 用最後一個 block
             result.append(doc.blockCount() - 1)
         return result
-
-    def _align_page_heights(self) -> None:
-        """依左右兩側每頁的自然高度取 max，將較短側加 padding 對齊。"""
-        if self.transcript is None or not self.transcript.pages:
-            self.divider_overlay.set_boundaries([])
-            return
-        if self.slide_deck is None:
-            self.divider_overlay.set_boundaries([])
-            return
-        pages = self.transcript.pages
-        n = min(len(pages), self.slide_deck.page_count)
-        if n == 0:
-            return
-
-        # 左側：先清掉之前的 padding
-        self.view.clear_all_block_bottom_paddings()
-
-        # 算左每頁高度（需 document layout 就緒）
-        doc = self.view.document()
-        doc.documentLayout().documentSize()  # 強制 layout
-        left_page_tops: list[int] = []
-        for page in pages[:n]:
-            if 0 <= page.sentence_start < len(self.transcript.sentences):
-                char = self.transcript.sentences[page.sentence_start].start
-                left_page_tops.append(self.view.char_document_y(char))
-            else:
-                left_page_tops.append(0)
-        # 左每頁高度 = tops[i+1] - tops[i]；最後一頁 = doc_size - tops[-1]
-        doc_h = int(doc.documentLayout().documentSize().height())
-        left_heights: list[int] = []
-        for i in range(n):
-            if i + 1 < n:
-                left_heights.append(max(0, left_page_tops[i + 1] - left_page_tops[i]))
-            else:
-                left_heights.append(max(0, doc_h - left_page_tops[i]))
-
-        # 右側：先清 padding
-        self.slide_preview.set_page_bottom_paddings([0] * n)
-        right_heights = self.slide_preview.page_natural_heights()[:n]
-
-        # 每頁 target = max(left, right)
-        left_pads: list[int] = []
-        right_pads: list[int] = []
-        for i in range(n):
-            left_h = left_heights[i] if i < len(left_heights) else 0
-            right_h = right_heights[i] if i < len(right_heights) else 0
-            target = max(left_h, right_h)
-            left_pads.append(max(0, target - left_h))
-            right_pads.append(max(0, target - right_h))
-
-        # 套 padding
-        block_nums = self._compute_page_left_blocks()
-        for i, pad in enumerate(left_pads):
-            if i >= len(block_nums):
-                break
-            self.view.set_block_bottom_padding(block_nums[i], pad)
-        self.slide_preview.set_page_bottom_paddings(right_pads)
-
-        # 觸發重繪 overlay
-        QTimer.singleShot(20, self._update_divider_overlay)
-
-    def _update_divider_overlay(self) -> None:
-        """依目前 scrollbar 位置 + 每頁累加高度 → 算出各頁邊界的 viewport Y → 設定 overlay。"""
-        if self.transcript is None or not self.transcript.pages:
-            self.divider_overlay.set_boundaries([])
-            return
-        if self.slide_deck is None:
-            self.divider_overlay.set_boundaries([])
-            return
-        pages = self.transcript.pages
-        n = min(len(pages), self.slide_deck.page_count)
-        scroll_val = self.view.verticalScrollBar().value()
-        ov_geo = self.divider_overlay.geometry()
-        # 確保 overlay 蓋滿 content_splitter
-        if ov_geo.width() != self.content_splitter.width() or ov_geo.height() != self.content_splitter.height():
-            self.divider_overlay.setGeometry(
-                0, 0, self.content_splitter.width(), self.content_splitter.height()
-            )
-        boundaries: list[tuple[int, int, int]] = []
-        for i, page in enumerate(pages[:n]):
-            if 0 <= page.sentence_start < len(self.transcript.sentences):
-                char = self.transcript.sentences[page.sentence_start].start
-                doc_y = self.view.char_document_y(char)
-                viewport_y = doc_y - scroll_val
-                # 只在頁開始（不是第一頁 top=0）畫
-                if i > 0 and -20 <= viewport_y <= self.divider_overlay.height() + 20:
-                    boundaries.append((viewport_y, page.number, n))
-        self.divider_overlay.set_boundaries(boundaries)
 
     def _open_slide_viewer(self, page_no: int) -> None:
         """雙擊 slide → 彈出大圖檢視視窗。"""
@@ -2718,7 +2603,8 @@ class MainWindow(QMainWindow):
         self.view.set_position(result.global_char_pos)
 
     def _toggle_time_panel(self) -> None:
-        self.time_panel.setVisible(not self.time_panel.isVisible())
+        """T 鍵：切換時間列（改切 dock，面板本身已交給 dock 管理）。"""
+        self.dock_time.setVisible(not self.dock_time.isVisible())
 
     def _toggle_fullscreen(self) -> None:
         if self.isFullScreen():
@@ -3037,76 +2923,20 @@ class MainWindow(QMainWindow):
                 )
 
     def _set_thumbnail_width(self, width: int) -> None:
-        """設定縮圖列在 content_splitter 的寬度。
-        width=0 表示收合；否則 clamp 在 [180, min(400, total*0.4)] 以免吃掉主內容區。"""
-        sizes = self.content_splitter.sizes()
-        if len(sizes) < 2:
+        """設定縮圖列寬度（dock 化後由 QMainWindow 統一調整）。"""
+        if width <= 0 or not self.dock_slides.isVisible():
             return
-        total = sum(sizes)
-        if width <= 0:
-            self.content_splitter.setSizes([0, total])
-            return
-        # 最小 180（太窄看不到縮圖標題）；最大取「total 的 40%」和 400 的較小者
-        max_thumb = max(180, min(400, int(total * 0.4)))
-        new_thumb = max(180, min(max_thumb, width))
-        # 主內容區至少保留 300px，否則縮圖全部讓位
-        if total - new_thumb < 300:
-            new_thumb = max(0, total - 300)
-        self.content_splitter.setSizes([new_thumb, total - new_thumb])
+        capped = max(160, min(420, int(width)))
+        self.resizeDocks([self.dock_slides], [capped], Qt.Orientation.Horizontal)
 
     def _on_thumbnail_collapse(self, collapse: bool) -> None:
-        """收合 / 展開縮圖列。收合時顯示一個浮動 ▶ 按鈕可再展開。"""
-        active = self.session_manager.active
-        if collapse:
-            # 記住目前寬度；收合 → 隱藏 + 把 splitter 左欄壓到 0
-            if active is not None:
-                sizes = self.content_splitter.sizes()
-                if len(sizes) >= 2 and sizes[0] > 0:
-                    active.thumbnail_panel_width = sizes[0]
-            # 關鍵 1：minimumWidth 從 160 暫時降到 0，否則 setSizes([0, ...]) 會被夾回 160
-            self.slide_preview.setMinimumWidth(0)
-            self.slide_preview.hide()
-            sizes = self.content_splitter.sizes()
-            if len(sizes) >= 2:
-                total = sum(sizes)
-                self.content_splitter.setSizes([0, total])
-            self._show_thumbnail_expand_btn()
-        else:
-            # 展開 → 還原最小寬度 + 顯示 + 還原寬度
-            self.slide_preview.setMinimumWidth(160)
-            self.slide_preview.show()
-            width = active.thumbnail_panel_width if active is not None else 200
-            self._set_thumbnail_width(max(180, width))
-            self._hide_thumbnail_expand_btn()
+        """縮圖列的收合鈕：直接關掉 dock。
 
-    def _show_thumbnail_expand_btn(self) -> None:
-        """顯示浮動 ▶ 按鈕讓使用者重新展開縮圖列。
-        關鍵 2：parent 改 MainWindow（self），不要 parent 到 content_splitter，
-        否則 QSplitter 會把它當成 section 重排版面，破壞主內容區顯示。"""
-        if not hasattr(self, "_btn_expand_thumb"):
-            self._btn_expand_thumb = QToolButton(self)
-            self._btn_expand_thumb.setText("▶")
-            self._btn_expand_thumb.setToolTip("展開縮圖列")
-            self._btn_expand_thumb.setStyleSheet(
-                "QToolButton { background: #4CAF50; color: white; "
-                "font-size: 13px; padding: 4px 2px; border: none; "
-                "border-top-right-radius: 6px; border-bottom-right-radius: 6px; }"
-                "QToolButton:hover { background: #66BB6A; }"
-            )
-            self._btn_expand_thumb.setFixedSize(20, 40)
-            self._btn_expand_thumb.clicked.connect(
-                lambda: self._on_thumbnail_collapse(False)
-            )
-        # 對齊到 content_splitter 的左上角；y 取垂直置中
-        target = self.content_splitter
-        top_left = target.mapTo(self, target.rect().topLeft())
-        self._btn_expand_thumb.move(top_left.x(), top_left.y() + target.height() // 2 - 20)
-        self._btn_expand_thumb.show()
-        self._btn_expand_thumb.raise_()
-
-    def _hide_thumbnail_expand_btn(self) -> None:
-        if hasattr(self, "_btn_expand_thumb"):
-            self._btn_expand_thumb.hide()
+        要再打開就從「檢視」選單勾回來，或把它拖回視窗邊緣——
+        以前那套 setMinimumWidth(0) 繞 QSplitter 夾制、外加一顆手動定位的
+        浮動展開鈕，dock 化之後都不需要了。
+        """
+        self.dock_slides.setVisible(not collapse)
 
     def _current_page_idx(self) -> int:
         """回傳目前 engine.current_sentence_index 所在頁的 index（0-based）。"""
@@ -3139,13 +2969,13 @@ class MainWindow(QMainWindow):
 
     def _toggle_qa_mode(self) -> None:
         """切換 Q&A 模式：右側顯示/隱藏 QA 面板。"""
-        if self.qa_panel.isVisible():
+        if self.dock_qa.isVisible():
             self._exit_qa_mode()
         else:
             self._enter_qa_mode()
 
     def _enter_qa_mode(self) -> None:
-        self.qa_panel.show()
+        self.dock_qa.show()
         self.act_qa_mode.setChecked(True)
         self.act_qa_mode.setText("Q&A 模式")
         self.sync_module_toggle("qa", True)
@@ -3717,17 +3547,6 @@ class MainWindow(QMainWindow):
         # 遮罩跟著 stack 同大小（直屏 slide 模式也看得到）
         if hasattr(self, "loading_overlay") and self.loading_overlay.isVisible():
             self.loading_overlay.resize(self._content_stack.size())
-        # 收合縮圖時的浮動展開按鈕也要跟著 splitter 重定位
-        if (
-            hasattr(self, "_btn_expand_thumb")
-            and self._btn_expand_thumb.isVisible()
-            and hasattr(self, "content_splitter")
-        ):
-            target = self.content_splitter
-            top_left = target.mapTo(self, target.rect().topLeft())
-            self._btn_expand_thumb.move(
-                top_left.x(), top_left.y() + target.height() // 2 - 20
-            )
         # 直屏/橫屏自適應
         self._apply_orientation_layout()
 
@@ -3788,6 +3607,10 @@ class MainWindow(QMainWindow):
                     s.slide_deck.close()
                 except Exception:
                     pass
-        self.cfg = dataclass_replace(self.cfg, window_geometry=bytes(self.saveGeometry()))
+        self.cfg = dataclass_replace(
+            self.cfg,
+            window_geometry=bytes(self.saveGeometry()),
+            dock_state=bytes(self.saveState()),   # 面板停靠佈局
+        )
         save_config(self.cfg)
         super().closeEvent(event)
