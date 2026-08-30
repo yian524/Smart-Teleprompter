@@ -74,7 +74,7 @@ A: 【翻到備答 B01 五維度 頁】 五個維度涵蓋三個層次……
 `【B0X】` 需在設定中指定「備答起始頁」（`qa_backup_start_page`，即 B01 對應的實際頁碼）才會換算；未設定時只會忽略該標記，不會亂翻頁。
 
 ### 即時翻譯（Q&A 面板內）
-- **Argos Translate**（本地離線、穩定、免網路）
+- **NLLB-200 distilled**（本地離線，與辨識器共用 CTranslate2 引擎）
 - **OpenCC s2tw**：自動轉繁體中文
 - **Google Translate fallback**：Argos 不可用時自動切換
 
@@ -200,7 +200,7 @@ A: 約 100GB Common Crawl 語料。
 pytest
 ```
 
-目前 575/575 測試全綠。
+目前 591/591 測試全綠。
 
 ## 📄 授權
 

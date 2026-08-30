@@ -1,6 +1,6 @@
 [project]
 name = "smart-teleprompter"
-version = "1.8.1"
+version = "1.9.0"
 description = "智能語音提詞機 — 即時語音辨識自動對齊講稿，支援卡拉OK 式逐字高亮"
 readme = "README.md"
 requires-python = ">=3.10,<3.14"
@@ -18,7 +18,7 @@ dependencies = [
     "markdown-it-py>=3.0.0",
     "pypinyin>=0.50.0",
     "deep-translator>=1.11.0",
-    "argostranslate>=1.9.0",
+    "sentencepiece>=0.2.0",
     "opencc-python-reimplemented>=0.1.7",
     "pymupdf>=1.24.0",
     "imageio-ffmpeg>=0.4.9",
