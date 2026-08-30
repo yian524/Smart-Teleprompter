@@ -242,3 +242,51 @@ def test_qa_module_actually_opens_the_panel(no_audio, win, app):
     win.module_toggles["qa"].setChecked(True)
     app.processEvents()
     assert win.qa_panel.isVisible(), "重複開關後仍要能展開"
+
+
+# ============================================================
+# 反向同步：從別的入口切換模式時，工具列開關要跟上
+# ============================================================
+
+def test_edit_mode_from_elsewhere_syncs_toggle(win, app):
+    """點講稿的「編輯或跳轉」對話框、Ctrl+E、選單都不經過開關本身，
+    但使用者看到的狀態必須一致。"""
+    toggle = win.module_toggles["edit"]
+    assert not toggle.isChecked()
+
+    win.act_edit_mode.setChecked(True)      # 等同 Ctrl+E / 對話框按「是」
+    app.processEvents()
+    assert toggle.isChecked(), "編輯模式開啟時工具列開關要跟著亮"
+    assert win.module_bars["edit"].isVisible()
+
+    win.act_edit_mode.setChecked(False)
+    app.processEvents()
+    assert not toggle.isChecked()
+    assert not win.module_bars["edit"].isVisible()
+
+
+def test_synced_toggle_updates_its_label_colour(win, app):
+    """同步時會 blockSignals，標籤顏色仍必須跟著變（否則滑塊亮了字還是灰的）。"""
+    toggle = win.module_toggles["edit"]
+
+    win.act_edit_mode.setChecked(True)
+    app.processEvents()
+    assert "#ffffff" in toggle.label.styleSheet()
+
+    win.act_edit_mode.setChecked(False)
+    app.processEvents()
+    assert "#8f959e" in toggle.label.styleSheet()
+
+
+def test_qa_mode_from_shortcut_syncs_toggle(no_audio, win, app):
+    """Ctrl+Q 進 Q&A 時，Q&A 開關也要亮。"""
+    toggle = win.module_toggles["qa"]
+    assert not toggle.isChecked()
+
+    win._toggle_qa_mode()
+    app.processEvents()
+    assert toggle.isChecked()
+
+    win._toggle_qa_mode()
+    app.processEvents()
+    assert not toggle.isChecked()
