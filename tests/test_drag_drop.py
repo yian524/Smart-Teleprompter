@@ -128,3 +128,41 @@ def test_drag_enter_previews_what_will_load(win, script_file, pdf_file):
 
     both = win.describe_drop([str(script_file), str(pdf_file)])
     assert "講稿" in both and "投影片" in both
+
+
+# ============================================================
+# 結構性回歸：防止 handler 被重複定義而靜默失效
+# ============================================================
+
+def test_only_one_drop_handler_defined():
+    """`MainWindow` 只能有一組拖放 handler。
+
+    v1.6.1 曾同時存在兩組 dragEnter/drop，後定義者勝出，導致新寫的提示與
+    多檔處理完全沒生效，而測試因為只測輔助方法仍然全綠。
+    """
+    import inspect
+
+    from teleprompter.ui import main_window as mw
+
+    src = inspect.getsource(mw.MainWindow)
+    for name in ("dragEnterEvent", "dragMoveEvent", "dropEvent"):
+        assert src.count(f"def {name}(") == 1, f"{name} 被定義了不只一次"
+
+
+def test_drop_handler_routes_through_load_dropped_paths():
+    """真正的 dropEvent 必須走 load_dropped_paths（否則提示與分類都不會生效）。"""
+    import inspect
+
+    from teleprompter.ui import main_window as mw
+
+    body = inspect.getsource(mw.MainWindow.dropEvent)
+    assert "load_dropped_paths" in body
+
+
+def test_prompter_view_lets_file_drops_through():
+    """拖到文字區的檔案要冒泡給主視窗，不能被 QTextEdit 當文字插入。"""
+    import inspect
+
+    from teleprompter.ui import prompter_view as pv
+
+    assert "canInsertFromMimeData" in inspect.getsource(pv.PrompterView)

@@ -51,6 +51,10 @@ class AppConfig:
     qa_use_system_audio: bool = True
     # 上次載入的 Q&A 庫路徑；下次啟動自動還原
     last_qa_path: str = ""
+    # 最近使用（以 | 分隔，各留 5 筆）＋ 投影片的上次目錄
+    recent_scripts: str = ""
+    recent_slides: str = ""
+    last_slides_path: str = ""
     # 答稿卡拉 OK 逐字高亮（QA 面板的滑動開關）
     qa_karaoke_enabled: bool = False
     # Q&A 庫裡 B01 對應的實際投影片頁碼（1-based）；0 = 不換算備答編號

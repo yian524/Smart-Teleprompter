@@ -55,6 +55,7 @@ from ..core.session import Session, SessionManager, default_sessions_path
 from .page_divider_overlay import PageDividerOverlay
 from .prompter_view import PrompterView
 from .qa_panel import QAPanel
+from .empty_state import EmptyStateOverlay
 from .floating_timer import FloatingTimer
 from .icons import icon
 from .module_switch import ModuleToggle
@@ -393,6 +394,13 @@ class MainWindow(QMainWindow):
 
         # 載入遮罩（覆蓋在 stack 上 — 不論顯示 PrompterView 或 SlideModeView 都看得到）
         self.loading_overlay = LoadingOverlay(self._content_stack)
+        # 空分頁引導：沒有講稿也沒有投影片時鋪在內容區上
+        self.empty_state = EmptyStateOverlay(self._content_stack)
+        self.empty_state.hide()
+        self.empty_state.open_file_requested.connect(self._open_file)
+        self.empty_state.paste_requested.connect(self._paste_text)
+        self.empty_state.sample_requested.connect(self.load_sample_bundle)
+        self.empty_state.recent_requested.connect(self._load_recent_path)
         self.loading_overlay.hide()
         # 標記「使用者按下開始但模型還沒準備好」的 pending 狀態
         self._pending_start: bool = False
@@ -594,7 +602,6 @@ class MainWindow(QMainWindow):
         self.act_open.setToolTip("開啟講稿檔（txt / md / docx）\n也可以直接把檔案拖進視窗")
         self.act_open.setShortcut(QKeySequence.StandardKey.Open)
         self.act_open.triggered.connect(self._open_file)
-        tb.addAction(self.act_open)
 
         # 儲存、貼上文字 → 只在選單列「檔案」中，不放工具列
         self.act_save = QAction("儲存", self)
@@ -610,9 +617,7 @@ class MainWindow(QMainWindow):
         self.act_open_slides = QAction("投影片", self)
         self.act_open_slides.setIcon(icon("slides"))
         self.act_open_slides.setToolTip("載入投影片（pdf / pptx）\n也可以直接把檔案拖進視窗")
-        self.act_open_slides.setToolTip("載入 PDF 或 PPTX 作為右側視覺參考")
         self.act_open_slides.triggered.connect(self._open_slides)
-        tb.addAction(self.act_open_slides)
 
         tb.addSeparator()
 
@@ -788,21 +793,16 @@ class MainWindow(QMainWindow):
         self.addToolBar(self._main_toolbar_row2)
         self._main_toolbar_row2.setVisible(False)
 
-        # 記錄 primary vs secondary 分界（用 act_clear_skipped 後的第一個 separator）
+        # 記錄 primary vs secondary 分界：以工具列上第一個 separator 為界。
+        # 舊版用 act_clear_skipped 定位，但那顆 action 從未加進工具列，
+        # index() 每次都丟 ValueError 走 fallback → secondary 永遠是空的。
         all_acts = list(tb.actions())
-        try:
-            clear_idx = all_acts.index(self.act_clear_skipped)
-            # primary = 到 clear_skipped 後面第一個 separator（含 sep）
-            split = clear_idx + 1
-            while split < len(all_acts) and not all_acts[split].isSeparator():
-                split += 1
-            if split < len(all_acts):
-                split += 1   # 包含 separator 本身
-            self._toolbar_primary_acts = all_acts[:split]
-            self._toolbar_secondary_acts = all_acts[split:]
-        except ValueError:
-            self._toolbar_primary_acts = all_acts
-            self._toolbar_secondary_acts = []
+        split = next(
+            (idx + 1 for idx, a in enumerate(all_acts) if a.isSeparator()),
+            len(all_acts),
+        )
+        self._toolbar_primary_acts = all_acts[:split]
+        self._toolbar_secondary_acts = all_acts[split:]
 
         # === 標註工具列（鉛筆/便利貼/橡皮擦/選字）— 獨立一條，常駐顯示不會被 overflow 吃掉 ===
         self.annotation_toolbar = QToolBar("標註工具", self)
@@ -1173,6 +1173,10 @@ class MainWindow(QMainWindow):
         m_file.addAction(self.act_open_slides)
         m_file.addAction(self.act_paste)
         m_file.addSeparator()
+        # 最近使用：開啟選單當下才重建內容（檔案可能已被移動或刪除）
+        self.menu_recent = m_file.addMenu("最近使用")
+        self.menu_recent.aboutToShow.connect(self._rebuild_recent_menu)
+        m_file.addSeparator()
         act_sample = QAction("🧪 載入範例（投影片＋講稿＋Q&A）", self)
         act_sample.setStatusTip("一鍵載入內建示範素材，用來快速試玩所有功能")
         act_sample.triggered.connect(self.load_sample_bundle)
@@ -1371,6 +1375,71 @@ class MainWindow(QMainWindow):
         if self.slide_preview.isVisible() and len(sizes) >= 2 and sizes[0] > 0:
             session.thumbnail_panel_width = sizes[0]
 
+    def _has_any_content(self) -> bool:
+        """這個分頁有沒有東西可以念／看。"""
+        has_script = self.transcript is not None and bool(self.transcript.sentences)
+        return has_script or self.slide_deck is not None
+
+    def refresh_empty_state(self) -> None:
+        """依目前分頁內容決定要不要顯示引導頁。"""
+        es = getattr(self, "empty_state", None)
+        if es is None:
+            return
+        if self._has_any_content():
+            es.hide()
+            return
+        es.set_recent(self._recent_paths())
+        es.cover(self._content_stack)
+
+    def _recent_paths(self) -> list[str]:
+        """最近使用過的講稿與投影片（新到舊）。"""
+        joined = f"{self.cfg.recent_scripts}|{self.cfg.recent_slides}"
+        seen, out = set(), []
+        for item in joined.split("|"):
+            item = item.strip()
+            if item and item not in seen and Path(item).exists():
+                seen.add(item)
+                out.append(item)
+        return out
+
+    def _remember_recent(self, path: str, *, slides: bool) -> None:
+        """把剛載入的檔案推到最近清單最前面，最多留 5 筆。"""
+        if not path:
+            return
+        current = (self.cfg.recent_slides if slides else self.cfg.recent_scripts)
+        items = [p for p in current.split("|") if p and p != path]
+        items.insert(0, path)
+        joined = "|".join(items[:5])
+        self.cfg = dataclass_replace(
+            self.cfg,
+            **({"recent_slides": joined} if slides else {"recent_scripts": joined}),
+        )
+        save_config(self.cfg)
+
+    def _rebuild_recent_menu(self) -> None:
+        """每次展開「最近使用」都重建：檔案可能已被移走或刪除。"""
+        menu = getattr(self, "menu_recent", None)
+        if menu is None:
+            return
+        menu.clear()
+        paths = self._recent_paths()
+        if not paths:
+            act = menu.addAction("（尚無紀錄）")
+            act.setEnabled(False)
+            return
+        for path in paths:
+            act = menu.addAction(Path(path).name)
+            act.setStatusTip(path)
+            act.setToolTip(path)
+            act.triggered.connect(lambda _=False, p=path: self._load_recent_path(p))
+
+    def _load_recent_path(self, path: str) -> None:
+        """引導頁的最近檔案按鈕：依副檔名決定走哪條載入。"""
+        if Path(path).suffix.lower() in self.SLIDE_SUFFIXES:
+            self.load_slides(path)
+        else:
+            self.load_file(path)
+
     def _bind_session_runtime(self, session: Session) -> None:
         """把 session 的 transcript/engine/slide_deck 套到 UI。"""
         self.engine = session.engine or self._new_engine_for_config()
@@ -1405,6 +1474,7 @@ class MainWindow(QMainWindow):
             self.view.set_text("")
             self.setWindowTitle(f"{self._app_title} — {session.title}")
             self.status_recognized.setText("請先載入講稿")
+        self.refresh_empty_state()
 
         # 嵌入式投影片 → 直接餵給 PrompterView
         self.view.set_slide_deck(session.slide_deck)
@@ -1558,24 +1628,12 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "儲存失敗", f"{e}")
 
     def _open_file(self) -> None:
-        """開啟講稿：先問來源 — 檔案 or 貼上文字。"""
-        box = QMessageBox(self)
-        box.setWindowTitle("開啟講稿")
-        box.setText(
-            "請選擇講稿來源：\n\n"
-            "• 從檔案載入：支援 .txt / .md / .markdown / .docx\n"
-            "• 貼上文字：直接貼純文字內容（會自動分句）"
-        )
-        btn_file = box.addButton("📂 從檔案", QMessageBox.ButtonRole.AcceptRole)
-        btn_paste = box.addButton("📋 貼上文字", QMessageBox.ButtonRole.AcceptRole)
-        btn_cancel = box.addButton("取消", QMessageBox.ButtonRole.RejectRole)
-        box.setDefaultButton(btn_file)
-        box.exec()
-        clicked = box.clickedButton()
-        if clicked is btn_file:
-            self._open_file_from_disk()
-        elif clicked is btn_paste:
-            self._paste_text()
+        """開啟講稿：直接開檔案對話框。
+
+        以前這裡會先跳一個「檔案 or 貼上文字」的三選一視窗，但「貼上文字」
+        在檔案選單與空分頁引導頁都已有獨立入口，多一層只是擋路。
+        """
+        self._open_file_from_disk()
 
     def _open_file_from_disk(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -1613,6 +1671,8 @@ class MainWindow(QMainWindow):
             return
         event.acceptProposedAction()
         self.status_recognized.setText(self.describe_drop(paths))
+        if getattr(self, "empty_state", None) is not None and self.empty_state.isVisible():
+            self.empty_state.set_drag_highlight(True)
 
     def describe_drop(self, paths: list[str]) -> str:
         """拖到視窗上方時的提示：先講清楚放開會載入什麼。"""
@@ -1630,8 +1690,12 @@ class MainWindow(QMainWindow):
 
     def dragLeaveEvent(self, event) -> None:  # noqa: D102, ARG002
         self.status_recognized.setText("已取消拖放")
+        if getattr(self, "empty_state", None) is not None:
+            self.empty_state.set_drag_highlight(False)
 
     def dropEvent(self, event) -> None:  # noqa: D102
+        if getattr(self, "empty_state", None) is not None:
+            self.empty_state.set_drag_highlight(False)
         paths = [u.toLocalFile() for u in event.mimeData().urls() if u.isLocalFile()]
         if self.load_dropped_paths(paths):
             event.acceptProposedAction()
@@ -1666,6 +1730,8 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "載入失敗", f"無法載入檔案:\n{e}")
             return
         self._apply_transcript(transcript, source_path=str(path))
+        self._remember_recent(str(path), slides=False)
+        self.refresh_empty_state()
 
     def _open_slides(self) -> None:
         """選擇 PDF/PPTX 並載入到右側預覽。"""
@@ -1754,6 +1820,10 @@ class MainWindow(QMainWindow):
         self.status_recognized.setText(
             f"✅ 投影片已載入 ({deck.page_count} 頁)"
         )
+        self._remember_recent(str(p), slides=True)
+        self.cfg = dataclass_replace(self.cfg, last_slides_path=str(p))
+        save_config(self.cfg)
+        self.refresh_empty_state()
         self.session_manager.sessions_changed.emit()   # tab tooltip 會更新
 
     # ---------- 統一捲動（scroll lock） ----------
@@ -1993,6 +2063,19 @@ class MainWindow(QMainWindow):
         if ok and text.strip():
             transcript = load_from_string(text)
             self._apply_transcript(transcript, source_path="")
+            # 貼上沒有檔名 → 用首句前幾個字當分頁標題，不要停在「未命名」
+            active = self.session_manager.active
+            if active is not None:
+                first = next(
+                    (ln.strip() for ln in text.splitlines()
+                     if ln.strip() and not ln.strip().startswith("#")),
+                    "",
+                )
+                active.title = (
+                    (first[:12] + "…") if len(first) > 12 else (first or "貼上的講稿")
+                )
+                self.session_manager.sessions_changed.emit()
+            self.refresh_empty_state()
 
     def _apply_transcript(self, transcript: Transcript, *, source_path: str) -> None:
         """把 transcript 套用到目前 active session。
@@ -3629,6 +3712,9 @@ class MainWindow(QMainWindow):
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
+        es = getattr(self, "empty_state", None)
+        if es is not None and es.isVisible():
+            es.setGeometry(self._content_stack.rect())
         # 遮罩跟著 stack 同大小（直屏 slide 模式也看得到）
         if hasattr(self, "loading_overlay") and self.loading_overlay.isVisible():
             self.loading_overlay.resize(self._content_stack.size())
@@ -3645,40 +3731,6 @@ class MainWindow(QMainWindow):
             )
         # 直屏/橫屏自適應
         self._apply_orientation_layout()
-
-    # ---------- 拖拉檔案支援 ----------
-
-    def dragEnterEvent(self, event) -> None:  # noqa: N802
-        mime = event.mimeData()
-        if mime.hasUrls():
-            # 檢查副檔名是否支援
-            for url in mime.urls():
-                p = Path(url.toLocalFile())
-                if p.suffix.lower() in (
-                    ".txt", ".md", ".markdown", ".docx",
-                    ".pdf", ".pptx", ".ppt",
-                ):
-                    event.acceptProposedAction()
-                    return
-        event.ignore()
-
-    def dragMoveEvent(self, event) -> None:  # noqa: N802
-        self.dragEnterEvent(event)
-
-    def dropEvent(self, event) -> None:  # noqa: N802
-        mime = event.mimeData()
-        if not mime.hasUrls():
-            return
-        transcript_exts = (".txt", ".md", ".markdown", ".docx")
-        slide_exts = (".pdf", ".pptx", ".ppt")
-        for url in mime.urls():
-            p = Path(url.toLocalFile())
-            suf = p.suffix.lower()
-            if suf in transcript_exts:
-                self.load_file(str(p))
-            elif suf in slide_exts:
-                self.load_slides(str(p))
-        event.acceptProposedAction()
 
     def closeEvent(self, event) -> None:
         ft = getattr(self, "floating_timer", None)
