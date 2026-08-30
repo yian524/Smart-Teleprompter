@@ -3646,40 +3646,6 @@ class MainWindow(QMainWindow):
         # 直屏/橫屏自適應
         self._apply_orientation_layout()
 
-    # ---------- 拖拉檔案支援 ----------
-
-    def dragEnterEvent(self, event) -> None:  # noqa: N802
-        mime = event.mimeData()
-        if mime.hasUrls():
-            # 檢查副檔名是否支援
-            for url in mime.urls():
-                p = Path(url.toLocalFile())
-                if p.suffix.lower() in (
-                    ".txt", ".md", ".markdown", ".docx",
-                    ".pdf", ".pptx", ".ppt",
-                ):
-                    event.acceptProposedAction()
-                    return
-        event.ignore()
-
-    def dragMoveEvent(self, event) -> None:  # noqa: N802
-        self.dragEnterEvent(event)
-
-    def dropEvent(self, event) -> None:  # noqa: N802
-        mime = event.mimeData()
-        if not mime.hasUrls():
-            return
-        transcript_exts = (".txt", ".md", ".markdown", ".docx")
-        slide_exts = (".pdf", ".pptx", ".ppt")
-        for url in mime.urls():
-            p = Path(url.toLocalFile())
-            suf = p.suffix.lower()
-            if suf in transcript_exts:
-                self.load_file(str(p))
-            elif suf in slide_exts:
-                self.load_slides(str(p))
-        event.acceptProposedAction()
-
     def closeEvent(self, event) -> None:
         ft = getattr(self, "floating_timer", None)
         if ft is not None:

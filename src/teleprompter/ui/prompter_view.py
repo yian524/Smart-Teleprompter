@@ -189,6 +189,16 @@ class PrompterView(QTextEdit):
     def is_edit_mode(self) -> bool:
         return self._edit_mode
 
+    def canInsertFromMimeData(self, source) -> bool:  # noqa: D102, N802
+        """檔案拖進來時交給主視窗處理，不要當成文字插進講稿。
+
+        QTextEdit 預設會接住帶檔案 URL 的 drop 並插入檔名，使用者拖 PDF 進
+        文字區就會看到一行路徑而不是投影片被載入。
+        """
+        if source is not None and source.hasUrls():
+            return False
+        return super().canInsertFromMimeData(source)
+
     def set_edit_mode(self, enabled: bool) -> None:
         """切換編輯模式：enabled=True 時使用者可直接修改講稿。
 
