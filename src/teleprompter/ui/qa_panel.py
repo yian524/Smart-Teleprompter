@@ -316,7 +316,12 @@ class QAPanel(QWidget):
         self.translation_text.setVisible(checked)
         if checked:
             if not self.translator.is_running():
-                self.translator.start(source_lang="auto", target_lang="zh-TW")
+                # 辨識語言決定翻譯方向：聽英文就翻中文，聽中文就翻英文
+                src = self.get_language()
+                self.translator.start(
+                    source_lang=("en" if src in ("en", "auto") else src),
+                    target_lang=("zh" if src in ("en", "auto") else "en"),
+                )
             if self._recognized_accum:
                 self.translator.translate(self._recognized_accum)
         else:
