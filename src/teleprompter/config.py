@@ -34,6 +34,8 @@ class AppConfig:
     milestone_marks_sec: tuple[int, ...] = (300, 60)  # 剩 5 分、剩 1 分
     last_transcript_path: str = ""
     window_geometry: bytes = b""
+    # 面板停靠佈局（QMainWindow.saveState 的序列化結果）
+    dock_state: bytes = b""
     prefer_secondary_screen: bool = True
     karaoke_smooth_ms: int = 150
     # 時間軸軟推進：根據語速估算自動前進位置

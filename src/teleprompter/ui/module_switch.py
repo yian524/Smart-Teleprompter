@@ -56,13 +56,14 @@ class ModuleToggle(QWidget):
     def __init__(self, text: str, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(8, 0, 4, 0)
+        lay.setContentsMargins(10, 0, 6, 0)
         lay.setSpacing(7)
         self.switch = ModuleSwitch(self)
         self.label = QLabel(text, self)
         self.label.setObjectName("moduleLabel")
-        lay.addWidget(self.switch)
+        # 名稱在前、滑塊在後：讀的時候先看到「這是什麼」，再看「開了沒」
         lay.addWidget(self.label)
+        lay.addWidget(self.switch)
         self.toggled = self.switch.toggled
         # 點文字也能切換（放大點擊區）
         self.label.setCursor(Qt.CursorShape.PointingHandCursor)

@@ -281,6 +281,10 @@ def test_synced_toggle_updates_its_label_colour(win, app):
 def test_qa_mode_from_shortcut_syncs_toggle(no_audio, win, app):
     """Ctrl+Q 進 Q&A 時，Q&A 開關也要亮。"""
     toggle = win.module_toggles["qa"]
+    # dock 佈局是全域的（saveState），前一個測試留下的狀態可能讓 Q&A 已展開
+    if toggle.isChecked() or win.dock_qa.isVisible():
+        win._exit_qa_mode()
+        app.processEvents()
     assert not toggle.isChecked()
 
     win._toggle_qa_mode()
