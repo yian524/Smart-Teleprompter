@@ -86,10 +86,15 @@ MODULES = ("edit", "annot", "qa", "follow")
 
 
 def test_all_module_bars_hidden_by_default(win):
-    """預設是演講狀態：四條模組列全收起，畫面只有常駐列。"""
+    """預設是演講狀態：四條模組列全收起，畫面只有常駐列。
+
+    注意「跟讀」開關可能因設定而預設亮著（它代表語音跟讀已啟用），
+    但工具列仍不該展開——展開只在使用者主動點擊時發生。
+    """
     assert set(win.module_bars) == set(MODULES)
     for key in MODULES:
         assert not win.module_bars[key].isVisible(), f"{key} 模組列不該預設展開"
+    for key in ("edit", "annot", "qa"):
         assert not win.module_toggles[key].isChecked()
     # 舊的標註工具列也不該再常駐
     assert not win.annotation_toolbar.isVisible()
@@ -109,6 +114,10 @@ def no_audio(win, monkeypatch):
 
 @pytest.mark.parametrize("key", MODULES)
 def test_toggle_shows_and_hides_module_bar(no_audio, win, app, key):
+    # 跟讀開關可能已因設定而亮著 → 先確實關掉，才能測「打開」這個動作
+    win.module_toggles[key].setChecked(False)
+    app.processEvents()
+
     win.module_toggles[key].setChecked(True)
     app.processEvents()
     assert win.module_bars[key].isVisible(), f"{key} 開關打開後模組列要出現"

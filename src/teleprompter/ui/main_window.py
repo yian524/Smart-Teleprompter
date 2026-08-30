@@ -51,6 +51,12 @@ from ..core.transcript_loader import Transcript, load_transcript, load_from_stri
 from ..core.pdf_renderer import SlideDeck, load_slide_deck
 from ..core.pptx_converter import PptxConversionError, convert_pptx_to_pdf
 from ..core.recorder import RecordingController, default_recording_root
+from ..core.recognition_service import (
+    SOURCE_LOOPBACK,
+    SOURCE_MIC,
+    RecognitionNeed,
+    RecognitionService,
+)
 from ..core.session import Session, SessionManager, default_sessions_path
 from .page_divider_overlay import PageDividerOverlay
 from .prompter_view import PrompterView
@@ -285,6 +291,8 @@ class MainWindow(QMainWindow):
 
         self.audio = AudioCaptureController(self)
         self.recognizer = SpeechRecognizerController(self)
+        # 辨識與音訊的唯一入口：跟讀與 Q&A 都透過它登記需求，避免互相覆蓋
+        self.recognition = RecognitionService(self.recognizer, self.audio, self)
         # 演講錄影（即時視訊 + 聲音 → MP4）
         self.recorder = RecordingController(self)
         self.audio.raw_frame.connect(self.recorder.on_audio_frame)
@@ -407,6 +415,7 @@ class MainWindow(QMainWindow):
         # QA 模式獨立啟動時的 pending：模型就緒後啟動音訊（loopback）
         self._qa_pending_audio_start: bool = False
         self._pages_missing_guard: bool = False
+        self._manual_running: bool = False
         self.floating_timer: FloatingTimer | None = None
 
         # ---- 狀態列 ----
@@ -752,6 +761,15 @@ class MainWindow(QMainWindow):
             tg.toggled.connect(lambda on, k=key: self._on_module_toggled(k, on))
             tb.addWidget(tg)
             self.module_toggles[key] = tg
+        # 跟讀開關要反映設定，否則預設關閉狀態會在第一次切換時把設定蓋掉。
+        # 用 blockSignals 只改開關外觀，不觸發 _on_module_toggled ——
+        # 「跟讀已啟用」與「跟讀工具列要展開」是兩件事，後者只在使用者
+        # 主動點擊時才發生，開機不該平白多出一列。
+        follow_toggle = self.module_toggles.get("follow")
+        if follow_toggle is not None and self.cfg.follow_mode_enabled:
+            follow_toggle.switch.blockSignals(True)
+            follow_toggle.setChecked(True)
+            follow_toggle.switch.blockSignals(False)
 
         tb.addSeparator()
 
@@ -1067,7 +1085,16 @@ class MainWindow(QMainWindow):
             if self.qa_panel.isVisible() != on:
                 self._toggle_qa_mode()
         elif key == "follow":
-            self.view.set_karaoke_enabled(on) if hasattr(self.view, "set_karaoke_enabled") else None
+            # 跟讀＝要不要用語音自動對齊。這顆開關以前是死碼（呼叫一個不存在
+            # 的方法），現在真的決定「開始」會不會載模型與開麥克風。
+            self.cfg = dataclass_replace(self.cfg, follow_mode_enabled=bool(on))
+            save_config(self.cfg)
+            if not on and self.audio.is_running() and self.recognition.is_active("follow"):
+                # 念稿進行中關掉跟讀 → 收掉辨識資源，但計時繼續
+                self.recognition.release("follow")
+                self._manual_running = True
+                self.status_recognized.setText("已關閉跟讀，改為手動模式（計時繼續）")
+            self._update_start_action_hint()
 
     def sync_module_toggle(self, key: str, on: bool) -> None:
         """外部（快捷鍵／選單）改變模式時，讓對應的模組開關跟上，不重複觸發。"""
@@ -2130,7 +2157,7 @@ class MainWindow(QMainWindow):
     # ---------- 開始/暫停 ----------
 
     def _toggle_run(self) -> None:
-        if self.audio.is_running():
+        if self.audio.is_running() or getattr(self, "_manual_running", False):
             self._pause()
         else:
             self._start()
@@ -2167,8 +2194,36 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, "尚未載入講稿", "請先載入或貼上講稿。")
         return False
 
+    def _update_start_action_hint(self) -> None:
+        """讓「開始」按鈕說清楚它會做什麼（會不會開麥克風差很多）。"""
+        act = getattr(self, "act_start", None)
+        if act is None:
+            return
+        if self.follow_enabled():
+            act.setToolTip("開始念稿：語音跟讀＋計時（首次需載入辨識模型）\n空白鍵")
+        else:
+            act.setToolTip("開始計時：手動翻頁，不啟動語音辨識\n空白鍵")
+
+    def follow_enabled(self) -> bool:
+        """跟讀（語音自動對齊）是否開啟——決定「開始」要不要動用辨識資源。"""
+        toggle = getattr(self, "module_toggles", {}).get("follow")
+        if toggle is not None:
+            return toggle.isChecked()
+        return bool(getattr(self.cfg, "follow_mode_enabled", True))
+
     def _start(self) -> None:
         if not self._ensure_startable_transcript():
+            return
+
+        if not self.follow_enabled():
+            # 手動模式：只計時。不載模型、不開麥克風，按下去立刻開始。
+            self.timer_ctrl.start()
+            self.act_start.setText("暫停")
+            self.act_start.setIcon(icon("pause"))
+            self.status_recognized.setText(
+                "手動模式計時中：用 ↑ ↓ 換句、← → 翻頁（要語音跟讀請開啟「跟讀」）"
+            )
+            self._manual_running = True
             return
 
         if not self.recognizer.is_running():
@@ -2224,7 +2279,11 @@ class MainWindow(QMainWindow):
             self.act_start.setIcon(icon("play"))
             self.status_recognized.setText("已取消載入")
             return
-        self.audio.stop()
+        if getattr(self, "_manual_running", False):
+            # 手動模式沒有動用音訊 → 只停計時，避免把 Q&A 的收音一起關掉
+            self._manual_running = False
+        else:
+            self.audio.stop()
         self.timer_ctrl.pause()
         self.act_start.setText("繼續")
         self.act_start.setIcon(icon("play"))

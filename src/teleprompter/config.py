@@ -49,6 +49,8 @@ class AppConfig:
     # QA 模式使用系統聲音 loopback（Windows WASAPI）：抓 Teams/Zoom 觀眾聲音
     # True = 進 QA 時自動切 loopback；退出 QA 切回麥克風
     qa_use_system_audio: bool = True
+    # 跟讀（語音自動對齊）：關掉時「開始」只跑計時，不載模型也不開麥克風
+    follow_mode_enabled: bool = True
     # 上次載入的 Q&A 庫路徑；下次啟動自動還原
     last_qa_path: str = ""
     # 最近使用（以 | 分隔，各留 5 筆）＋ 投影片的上次目錄
