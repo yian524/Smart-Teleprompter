@@ -379,7 +379,10 @@ class MainWindow(QMainWindow):
         self.main_splitter.addWidget(self.content_splitter)
         self.qa_panel = QAPanel()
         self.qa_panel.close_qa_mode.connect(self._exit_qa_mode)
-        self.qa_panel.language_changed.connect(self._switch_recognizer_language)
+        # Q&A 換辨識語言 → 更新它登記的需求（仲裁層只在真的不同時才重載模型）
+        self.qa_panel.language_changed.connect(
+            lambda lang: self.recognition.update("qa", language=lang)
+        )
         self.view.pages_missing.connect(self._on_pages_missing)
         self.qa_panel.goto_page.connect(self._on_qa_goto_page)
         self.qa_panel.karaoke_toggled.connect(self._on_qa_karaoke_toggled)
@@ -1107,6 +1110,47 @@ class MainWindow(QMainWindow):
         bar = self.module_bars.get(key)
         if bar is not None:
             bar.setVisible(on)
+
+    def _exit_qa_mode(self) -> None:
+        self.qa_panel.hide()
+        self.act_qa_mode.setChecked(False)
+        self.act_qa_mode.setText("Q&A 模式")
+        self.sync_module_toggle("qa", False)
+        # 退出 Q&A：釋放資源。跟讀若還登記著，仲裁層會自動把語言與音訊來源
+        # 切回跟讀的設定；沒人登記就整個停下。
+        self.recognition.release("qa")
+        self._qa_pending_audio_start = False
+        self.status_recognized.setText("已回到提詞模式")
+
+    def _on_qa_goto_page(self, page_no: int) -> None:
+        """Q&A 命中帶頁碼的題目 → 翻到該投影片頁。
+
+        與 `_on_slide_page_requested` 的差別：QA 模式常常只開投影片、沒有講稿，
+        所以這裡不要求 transcript 存在，只要 deck 有那一頁就翻。
+        """
+        deck = getattr(self, "slide_deck", None)
+        total = deck.page_count if deck is not None else 0
+        if total <= 0 or page_no < 1 or page_no > total:
+            return
+        if self.transcript is not None and self.transcript.pages:
+            # 有講稿 → 走既有路徑，順帶同步講稿位置
+            self._on_slide_page_requested(page_no)
+        # 不論目前是 slide 或 split 模式都把大圖切過去：QA 時使用者要立刻看到那一頁
+        self.slide_mode_view.set_current_page(page_no - 1)
+        self.slide_preview.show_page(page_no)
+        self.slide_preview.scroll_to_page(page_no)
+
+    def _on_qa_karaoke_toggled(self, enabled: bool) -> None:
+        """記住答稿卡拉 OK 開關狀態。"""
+        self.cfg = dataclass_replace(self.cfg, qa_karaoke_enabled=bool(enabled))
+        save_config(self.cfg)
+
+    def _on_qa_path_changed(self, path: str) -> None:
+        """記住最後載入的 Q&A 庫路徑，下次啟動自動還原。"""
+        if not path:
+            return
+        self.cfg = dataclass_replace(self.cfg, last_qa_path=path)
+        save_config(self.cfg)
 
     def _toggle_qa_floating(self, on: bool) -> None:
         """Q&A 面板：獨立視窗 ↔ 收回主視窗右側。
@@ -2204,6 +2248,30 @@ class MainWindow(QMainWindow):
         else:
             act.setToolTip("開始計時：手動翻頁，不啟動語音辨識\n空白鍵")
 
+    def _follow_need(self) -> RecognitionNeed:
+        """跟讀要的：聽自己、講稿語言、帶講稿偏向讓辨識更準。"""
+        prompt = self.transcript.full_text[:200] if self.transcript else ""
+        return RecognitionNeed(
+            language=self.cfg.language,
+            initial_prompt=prompt,
+            source=SOURCE_MIC,
+            model_size=self.cfg.model_size,
+            compute_type=self.cfg.compute_type,
+            device=self.cfg.mic_device,
+        )
+
+    def _qa_need(self) -> RecognitionNeed:
+        """Q&A 要的：聽觀眾（系統音訊）、面板選的語言、不帶講稿偏向。"""
+        use_loopback = bool(getattr(self.cfg, "qa_use_system_audio", True))
+        return RecognitionNeed(
+            language=self.qa_panel.get_language(),
+            initial_prompt="",
+            source=SOURCE_LOOPBACK if use_loopback else SOURCE_MIC,
+            model_size=self.cfg.model_size,
+            compute_type=self.cfg.compute_type,
+            device=self.cfg.mic_device,
+        )
+
     def follow_enabled(self) -> bool:
         """跟讀（語音自動對齊）是否開啟——決定「開始」要不要動用辨識資源。"""
         toggle = getattr(self, "module_toggles", {}).get("follow")
@@ -2234,12 +2302,7 @@ class MainWindow(QMainWindow):
                 f"模型：{self.cfg.model_size}（首次載入約需 10-30 秒）\n請稍候，模型就緒後會自動開始計時",
             )
             self.loading_overlay.show_over(self._content_stack)
-            self.recognizer.start(
-                model_size=self.cfg.model_size,
-                language=self.cfg.language,
-                compute_type=self.cfg.compute_type,
-                initial_prompt=self.transcript.full_text[:200],
-            )
+            self.recognition.acquire("follow", self._follow_need())
             self.act_start.setText("取消")
             self.act_start.setIcon(icon("close"))
             self.status_recognized.setText("載入模型中…")
@@ -2249,21 +2312,13 @@ class MainWindow(QMainWindow):
         self._really_start_session()
 
     def _really_start_session(self) -> None:
-        """真正啟動：模型就緒後執行，啟動麥克風 + 計時。"""
-        device = self.cfg.mic_device
-        device_arg: int | str | None
-        if device == "":
-            device_arg = None
-        else:
-            try:
-                device_arg = int(device)
-            except ValueError:
-                device_arg = device
-        # QA 模式 + 啟用 system audio loopback → 抓 Teams/Zoom 的觀眾聲音
-        use_loopback = bool(
-            self.qa_panel.isVisible() and getattr(self.cfg, "qa_use_system_audio", True)
-        )
-        self.audio.start(device=device_arg, loopback=use_loopback)
+        """真正啟動念稿：登記跟讀需求 + 開始計時。
+
+        音訊來源與辨識語言都由 `_follow_need()` 描述、交給仲裁層套用。
+        以前這裡自己呼叫 `audio.start()`，遇到 Q&A 已佔用音訊時會被靜默忽略
+        （麥克風沒開卻顯示「辨識中」），改走仲裁層就不會再有那種無聲失敗。
+        """
+        self.recognition.acquire("follow", self._follow_need())
         self.timer_ctrl.start()
         self.act_start.setText("暫停")
         self.act_start.setIcon(icon("pause"))
@@ -2273,17 +2328,21 @@ class MainWindow(QMainWindow):
     def _pause(self) -> None:
         # 若模型還在載入中，點「取消」→ 取消 pending 狀態並隱藏遮罩
         if self._pending_start and self.loading_overlay.isVisible():
+            # 取消載入也要退出登記，否則跟讀會殘留在仲裁層裡，
+            # 等 Q&A 一釋放就被莫名其妙地接手回來
             self._pending_start = False
+            self.recognition.release("follow")
             self.loading_overlay.fade_out_and_hide()
             self.act_start.setText("開始")
             self.act_start.setIcon(icon("play"))
             self.status_recognized.setText("已取消載入")
             return
         if getattr(self, "_manual_running", False):
-            # 手動模式沒有動用音訊 → 只停計時，避免把 Q&A 的收音一起關掉
+            # 手動模式沒有動用辨識資源 → 只停計時
             self._manual_running = False
         else:
-            self.audio.stop()
+            # 只退出跟讀的登記；Q&A 若還開著，它的收音不受影響
+            self.recognition.release("follow")
         self.timer_ctrl.pause()
         self.act_start.setText("繼續")
         self.act_start.setIcon(icon("play"))
@@ -2340,8 +2399,10 @@ class MainWindow(QMainWindow):
         """串流辨識器吐出新穩定下來的文字 → 推進對齊位置。"""
         if not delta.strip():
             return
-        # Q&A 模式啟用中：文字同時路由到 Q&A 面板 + 底部狀態列（讓使用者確認有收音）
-        if self.qa_panel.isVisible():
+        # Q&A 正持有辨識資源時，這些文字是觀眾的話，不能拿來推進念稿位置。
+        # 判斷依據改用仲裁層（以前看 qa_panel.isVisible()，面板只是顯示狀態，
+        # 與「誰在用麥克風」是兩回事）。
+        if self.recognition.is_active("qa"):
             self.qa_panel.append_recognized(delta)
             # 卡拉 OK 開啟時，同一段辨識文字也用來推進答稿高亮
             self.qa_panel.advance_answer_karaoke(delta)
@@ -2591,12 +2652,11 @@ class MainWindow(QMainWindow):
             # 使用者當初有按開始 → 自動接手正式啟動計時
             self._really_start_session()
         elif getattr(self, "_qa_pending_audio_start", False):
-            # QA 模式獨立啟動：模型就緒後啟動音訊（loopback）
+            # Q&A 的音訊在 acquire 時就由仲裁層一併啟動了，這裡只更新提示
             self._qa_pending_audio_start = False
-            self._start_audio_for_qa()
-            self.status_recognized.setText(
-                "🎤 Q&A 模式已啟動：辨識中（含系統聲音 loopback）"
-            )
+            source = self.recognition.applied_need
+            where = "系統聲音" if source and source.source == SOURCE_LOOPBACK else "麥克風"
+            self.status_recognized.setText(f"Q&A 模式已啟動：辨識中（{where}）")
 
     def _on_audio_error(self, msg: str) -> None:
         QMessageBox.warning(self, "麥克風錯誤", msg)
@@ -3098,132 +3158,14 @@ class MainWindow(QMainWindow):
                 "Q&A 模式準備中", "正在切換辨識模型…",
             )
             self.loading_overlay.show_over(self._content_stack)
-        # 核心修正：QA 模式要獨立可啟動，不需使用者先按 ▶ 開始
-        # 1) recognizer 未啟 → 從頭載入（載好後 _on_model_loaded 會啟動音訊）
-        # 2) recognizer 已啟 → 切語言 + 重啟音訊改用 loopback
-        if not self.recognizer.is_running():
-            self._qa_pending_audio_start = True
-            self.recognizer.start(
-                model_size=self.cfg.model_size,
-                language=self.qa_panel.get_language(),
-                compute_type=self.cfg.compute_type,
-                initial_prompt="",   # QA 模式不帶講稿偏向
-            )
-        else:
-            self._switch_recognizer_language(self.qa_panel.get_language())
-            # 音訊如果已在跑 → 重啟切到 loopback；如果還沒跑 → 直接啟動
-            if getattr(self.cfg, "qa_use_system_audio", True):
-                if self.audio.is_running():
-                    self._restart_audio_for_current_mode()
-                else:
-                    self._start_audio_for_qa()
+        # Q&A 可獨立啟動，不必先按「開始」。透過仲裁層登記需求：跟讀若正在跑，
+        # 由仲裁層決定誰用資源（Q&A 優先，觀眾在等回答），跟讀標記為等待，
+        # Q&A 結束後自動回復——不再是兩邊各自 stop/start 互相覆蓋。
+        self._qa_pending_audio_start = True
+        self.recognition.acquire("qa", self._qa_need())
         self.status_recognized.setText(
             "Q&A 模式：觀眾提問會辨識並匹配預備答案（含遠距 Teams/Zoom 輸出聲音）"
         )
-
-    def _start_audio_for_qa(self) -> None:
-        """QA 模式獨立啟動音訊（不用先按 ▶）。使用 loopback（如設定啟用）。"""
-        device = self.cfg.mic_device
-        device_arg: int | str | None
-        if device == "":
-            device_arg = None
-        else:
-            try:
-                device_arg = int(device)
-            except ValueError:
-                device_arg = device
-        use_loopback = bool(
-            self.qa_panel.isVisible()
-            and getattr(self.cfg, "qa_use_system_audio", True)
-        )
-        self.audio.start(device=device_arg, loopback=use_loopback)
-
-    def _restart_audio_for_current_mode(self) -> None:
-        """根據目前是否在 QA 模式 + cfg.qa_use_system_audio 重啟音訊擷取。
-        報告中才有意義（audio 本來就 running）；若沒 running 就跳過，待 ▶ 開始 時用正確來源。"""
-        if not self.audio.is_running():
-            return
-        self.audio.stop()
-        device = self.cfg.mic_device
-        device_arg: int | str | None
-        if device == "":
-            device_arg = None
-        else:
-            try:
-                device_arg = int(device)
-            except ValueError:
-                device_arg = device
-        use_loopback = bool(
-            self.qa_panel.isVisible() and getattr(self.cfg, "qa_use_system_audio", True)
-        )
-        self.audio.start(device=device_arg, loopback=use_loopback)
-
-    def _on_qa_goto_page(self, page_no: int) -> None:
-        """Q&A 命中帶頁碼的題目 → 翻到該投影片頁。
-
-        與 `_on_slide_page_requested` 的差別：QA 模式常常只開投影片、沒有講稿，
-        所以這裡不要求 transcript 存在，只要 deck 有那一頁就翻。
-        """
-        deck = getattr(self, "slide_deck", None)
-        total = deck.page_count if deck is not None else 0
-        if total <= 0 or page_no < 1 or page_no > total:
-            return
-        if self.transcript is not None and self.transcript.pages:
-            # 有講稿 → 走既有路徑，順帶同步講稿位置
-            self._on_slide_page_requested(page_no)
-        # 不論目前是 slide 或 split 模式都把大圖切過去：QA 時使用者要立刻看到那一頁
-        self.slide_mode_view.set_current_page(page_no - 1)
-        self.slide_preview.show_page(page_no)
-        self.slide_preview.scroll_to_page(page_no)
-
-    def _on_qa_karaoke_toggled(self, enabled: bool) -> None:
-        """記住答稿卡拉 OK 開關狀態。"""
-        self.cfg = dataclass_replace(self.cfg, qa_karaoke_enabled=bool(enabled))
-        save_config(self.cfg)
-
-    def _on_qa_path_changed(self, path: str) -> None:
-        """記住最後載入的 Q&A 庫路徑，下次啟動自動還原。"""
-        if not path:
-            return
-        self.cfg = dataclass_replace(self.cfg, last_qa_path=path)
-        save_config(self.cfg)
-
-    def _exit_qa_mode(self) -> None:
-        self.qa_panel.hide()
-        self.act_qa_mode.setChecked(False)
-        self.act_qa_mode.setText("Q&A 模式")
-        self.sync_module_toggle("qa", False)
-        # 切回預設語言
-        self._switch_recognizer_language(self.cfg.language)
-        # 切回麥克風輸入（離開 QA → 報告繼續）
-        if getattr(self.cfg, "qa_use_system_audio", True):
-            self._restart_audio_for_current_mode()
-        self.status_recognized.setText("已回到提詞模式")
-
-    def _switch_recognizer_language(self, language: str) -> None:
-        """重啟 recognizer 以套用新語言（language 只能在建構時設）。
-
-        Q&A 模式（qa panel visible）時：
-        - 不傳中文講稿當 prompt（避免 Whisper 被中文語料誘導輸出中文）
-        - 用中性 prompt 或空字串
-        """
-        if not self.recognizer.is_running():
-            return
-        self.recognizer.stop()
-        # 決定 initial_prompt：提詞模式用講稿；Q&A 模式不帶任何偏向
-        if self.qa_panel.isVisible():
-            # Q&A 模式：用空 prompt，讓 Whisper 純粹依音訊辨識
-            prompt = ""
-        else:
-            prompt = self.transcript.full_text[:200] if self.transcript else ""
-        self.recognizer.start(
-            model_size=self.cfg.model_size,
-            language=language,
-            compute_type=self.cfg.compute_type,
-            initial_prompt=prompt,
-        )
-
-    # ---------- 演講記錄（錄音 + 截圖） ----------
 
     def _toggle_recording(self, checked: bool) -> None:
         if checked:
@@ -3326,15 +3268,8 @@ class MainWindow(QMainWindow):
             self._mux_dialog.close()
             self._mux_dialog = None
         self.status_recording.setText("")
-        # 若錄影前曾因 QA 模式把音訊從 loopback 切到 mic → 錄完切回 loopback
-        if (
-            getattr(self.cfg, "qa_use_system_audio", True)
-            and self.qa_panel.isVisible()
-            and self.audio.is_running()
-        ):
-            worker = getattr(self.audio, "_worker", None)
-            if worker is not None and not getattr(worker, "loopback", False):
-                self._restart_audio_for_current_mode()
+        # 錄影期間可能把音訊借去用麥克風 → 讓仲裁層把來源切回登記者要的設定
+        self.recognition.ensure()
         if mp4_path:
             QMessageBox.information(
                 self, "錄影已儲存",
