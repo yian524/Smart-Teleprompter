@@ -79,6 +79,7 @@ class QAPanel(QWidget):
         super().__init__(parent)
         self.library = QALibrary()
         self._recognized_accum = ""  # 累積目前的提問文字
+        self._last_translation = ""  # 最近一次的譯文（一併用於題目匹配）
         self._backup_start_page = 0  # B01 對應的實際投影片頁（0 = 不換算）
         self._last_emitted_page: int | None = None  # 避免同一題重複發翻頁訊號
         self._answer_shown = ""        # 目前顯示中的答稿（卡拉 OK 對齊基準）
@@ -297,6 +298,7 @@ class QAPanel(QWidget):
 
     def clear_question(self) -> None:
         """清空累積的提問（新一輪 Q&A 時用）。"""
+        self._last_translation = ""
         self._last_emitted_page = None
         self._recognized_accum = ""
         self.question_text.clear()
@@ -330,6 +332,11 @@ class QAPanel(QWidget):
 
     def _on_translation_ready(self, source: str, translated: str) -> None:
         self.translation_text.setPlainText(translated)
+        # 譯文是後來才到的（翻譯在另一條執行緒）→ 拿到後重新比對一次，
+        # 中文題庫配英文提問就是靠這一步才命中
+        self._last_translation = translated
+        if translated.strip():
+            self._refresh_match()
 
     def _on_translate_error(self, msg: str) -> None:
         self.translation_text.setPlainText(f"(翻譯失敗：{msg})")
@@ -345,10 +352,27 @@ class QAPanel(QWidget):
             if not cur or cur.startswith("(") or cur.startswith("…"):
                 self.translation_text.setPlainText(f"… {status_text}")
 
+    def _best_match(self, *texts: str):
+        """對多個候選字串各比一次，回傳分數最高的結果。
+
+        觀眾說英文、題庫是中文時，用英文原文比對幾乎不可能命中（只能靠拼音與
+        字面模糊比對）；把譯文一起丟進來比，中文題庫才找得到對應備答。
+        """
+        best = None
+        for text in texts:
+            if not text or not text.strip():
+                continue
+            candidate = self.library.match(text)
+            if candidate is None:
+                continue
+            if best is None or candidate.score > best.score:
+                best = candidate
+        return best
+
     def _refresh_match(self) -> None:
         if not self.library.items or not self._recognized_accum:
             return
-        match = self.library.match(self._recognized_accum)
+        match = self._best_match(self._recognized_accum, self._last_translation)
         if match is None:
             self.answer_text.clear()
             self.match_info.setText("")
