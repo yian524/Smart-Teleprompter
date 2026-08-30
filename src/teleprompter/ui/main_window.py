@@ -755,7 +755,7 @@ class MainWindow(QMainWindow):
         tb.addWidget(_spacer)
 
         self.module_toggles: dict[str, ModuleToggle] = {}
-        for key, label in (("edit", "編輯"), ("annot", "標註"),
+        for key, label in (("edit", "編輯"), ("annot", "筆記"),
                            ("qa", "Q&A"), ("follow", "跟讀")):
             tg = ModuleToggle(label)
             tg.toggled.connect(lambda on, k=key: self._on_module_toggled(k, on))
@@ -788,7 +788,7 @@ class MainWindow(QMainWindow):
         # === 模組工具列 ×4：預設全隱藏，由模組開關控制展開 ===
         # 每條左緣一個標籤（模組名 + 英文小字），與 design/toolbar_mockup_v2.html 對齊
         self.module_bars: dict[str, QToolBar] = {}
-        for key, zh, en in (("edit", "編輯", "EDIT"), ("annot", "標註", "ANNOTATE"),
+        for key, zh, en in (("edit", "編輯", "EDIT"), ("annot", "筆記", "NOTES"),
                             ("qa", "Q&A", "Q&A"), ("follow", "跟讀", "FOLLOW")):
             bar = QToolBar(f"{zh}模組", self)
             bar.setObjectName(f"moduleBar_{key}")
@@ -823,7 +823,7 @@ class MainWindow(QMainWindow):
         self._toolbar_secondary_acts = all_acts[split:]
 
         # === 標註工具列（鉛筆/便利貼/橡皮擦/選字）— 獨立一條，常駐顯示不會被 overflow 吃掉 ===
-        self.annotation_toolbar = QToolBar("標註工具", self)
+        self.annotation_toolbar = QToolBar("筆記工具", self)
         self.annotation_toolbar.setMovable(False)
         self.addToolBarBreak()
         self.addToolBar(self.annotation_toolbar)
@@ -843,7 +843,7 @@ class MainWindow(QMainWindow):
         self.act_tool_pencil = QAction("鉛筆", self)
         self.act_tool_pencil.setIcon(icon("draw"))
         self.act_tool_pencil.setToolTip(
-            "【標註層】自由手繪畫在畫面上（不動講稿文字本身）(P)"
+            "【筆記層】自由手繪畫在畫面上（不動講稿文字本身）(P)"
         )
         self.act_tool_pencil.setCheckable(True)
         self.act_tool_pencil.triggered.connect(lambda: self._set_annotation_tool("pencil"))
@@ -902,16 +902,16 @@ class MainWindow(QMainWindow):
         self.act_tool_eraser = QAction("橡皮擦", self)
         self.act_tool_eraser.setIcon(icon("eraser"))
         self.act_tool_eraser.setToolTip(
-            "【標註層】塗抹式刪除筆劃與便利貼 (E)"
+            "【筆記層】塗抹式刪除筆劃與便利貼 (E)"
         )
         self.act_tool_eraser.setCheckable(True)
         self.act_tool_eraser.triggered.connect(lambda: self._set_annotation_tool("eraser"))
         self.annotation_toolbar.addAction(self.act_tool_eraser)
 
-        self.act_clear_page = QAction("清除標註", self)
+        self.act_clear_page = QAction("清除筆記", self)
         self.act_clear_page.setIcon(icon("trash"))
         self.act_clear_page.setToolTip(
-            "一鍵清除當前頁的所有「標註」（鉛筆筆劃 + 便利貼）；"
+            "一鍵清除當前頁的所有「筆記」（鉛筆筆劃 + 便利貼）；"
             "這跟「清除文字格式」不同 — 不會動到講稿文字本身。"
         )
         self.act_clear_page.triggered.connect(self._clear_current_page_annotations)
@@ -972,7 +972,7 @@ class MainWindow(QMainWindow):
 
         # === 標註工具列延伸（row 2）：直屏時顯示，把文字編輯類工具移到這裡 ===
         # 避免直屏寬度不足時，B/I/U/格式/插入註解/清理空白 被擠到 overflow chevron 看不到
-        self.annotation_toolbar_row2 = QToolBar("標註工具延伸", self)
+        self.annotation_toolbar_row2 = QToolBar("筆記工具延伸", self)
         self.annotation_toolbar_row2.setMovable(False)
         self.addToolBarBreak()
         self.addToolBar(self.annotation_toolbar_row2)
@@ -1275,7 +1275,7 @@ class MainWindow(QMainWindow):
         m_tools.addAction(self.act_clear_skipped)
 
         # 標註
-        m_annot = mb.addMenu("標註(&A)")
+        m_annot = mb.addMenu("筆記(&A)")
         m_annot.addAction(self.act_tool_pointer)
         m_annot.addAction(self.act_tool_pencil)
         m_annot.addAction(self.act_tool_note)
@@ -2774,11 +2774,11 @@ class MainWindow(QMainWindow):
                 if a.anchor == "slide" and a.slide_page == target_page
             ]
             if not existing:
-                self.status_recognized.setText("本頁沒有標註可清除")
+                self.status_recognized.setText("本頁沒有筆記可清除")
                 return
             ret = QMessageBox.question(
-                self, "清除本頁標註",
-                f"確定清除第 {target_page} 頁的 {len(existing)} 個標註嗎？",
+                self, "清除本頁筆記",
+                f"確定清除第 {target_page} 頁的 {len(existing)} 個筆記嗎？",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,
             )
@@ -2790,16 +2790,16 @@ class MainWindow(QMainWindow):
             ]
             self.slide_mode_view.set_annotations(kept)
             self.slide_mode_view.annotations_changed.emit()
-            self.status_recognized.setText(f"🧹 已清除第 {target_page} 頁的 {len(existing)} 個標註")
+            self.status_recognized.setText(f"🧹 已清除第 {target_page} 頁的 {len(existing)} 個筆記")
         else:
             # transcript / split：清所有 doc 錨點
             existing = self.view.annotations()
             if not existing:
-                self.status_recognized.setText("沒有講稿標註可清除")
+                self.status_recognized.setText("沒有講稿筆記可清除")
                 return
             ret = QMessageBox.question(
-                self, "清除講稿標註",
-                f"確定清除講稿上所有 {len(existing)} 個標註嗎？",
+                self, "清除講稿筆記",
+                f"確定清除講稿上所有 {len(existing)} 個筆記嗎？",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,
             )
@@ -2807,7 +2807,7 @@ class MainWindow(QMainWindow):
                 return
             self.view.set_annotations([])
             self.view.annotations_changed.emit()
-            self.status_recognized.setText(f"🧹 已清除 {len(existing)} 個講稿標註")
+            self.status_recognized.setText(f"🧹 已清除 {len(existing)} 個講稿筆記")
 
     def _set_annotation_color(self, color: str) -> None:
         """設定鉛筆/便利貼顏色，派送到兩個 view。"""
