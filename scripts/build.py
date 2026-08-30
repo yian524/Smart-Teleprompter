@@ -72,6 +72,20 @@ def main() -> int:
         "--collect-data", "PySide6",
         # webrtcvad：避開 pyinstaller_hooks_contrib 的 hook bug
         "--collect-all", "webrtcvad",
+        # 排除不需要的重量級套件：專案本身不 import torch，faster-whisper 只在
+        # 「模型格式轉換」這個離線場景才需要它。stanza/spacy 是舊翻譯引擎
+        # （argostranslate）留下的鏈，v1.9 換成 NLLB 之後也不再需要。
+        "--exclude-module", "torch",
+        "--exclude-module", "torchvision",
+        "--exclude-module", "torchaudio",
+        "--exclude-module", "stanza",
+        "--exclude-module", "spacy",
+        "--exclude-module", "thinc",
+        "--exclude-module", "argostranslate",
+        "--exclude-module", "transformers",
+        # UPX 會壓縮 DLL，正是先前 Argos 在 exe 裡初始化失敗的成因之一；
+        # 換來的體積收益不值得這種難查的執行期故障。
+        "--noupx",
         # NVIDIA 運行時 library
         "--hidden-import", "nvidia.cublas",
         "--hidden-import", "nvidia.cudnn",
